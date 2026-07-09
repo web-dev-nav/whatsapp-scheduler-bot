@@ -292,6 +292,7 @@ function fillForm(config) {
   renderChatOptions(availableChats, config.groupName);
   form.timezone.value = config.timezone;
   form.message.value = config.message;
+  form.schedulerEnabled.checked = config.schedule.enabled !== false;
   form.shiftStartHour.value = config.schedule.shiftStartHour;
   form.shiftEndHour.value = config.schedule.shiftEndHour;
   setShiftTypeFromHours(config.schedule.shiftStartHour, config.schedule.shiftEndHour);
@@ -359,6 +360,7 @@ function readForm() {
     timezone: form.timezone.value.trim(),
     message: form.message.value.trim(),
     schedule: {
+      enabled: form.schedulerEnabled.checked,
       activeShiftDays,
       extraShiftDates,
       shiftStartHour: Number(form.shiftStartHour.value),
@@ -703,6 +705,11 @@ function queueAutoSave() {
   }, 250);
 }
 
+function markUnsaved() {
+  clearTimeout(autoSaveTimer);
+  setStatus('Unsaved changes. Click Save settings to apply.', 'error');
+}
+
 addExtraDate.addEventListener('click', () => {
   const dateKey = extraShiftDateInput.value;
 
@@ -713,7 +720,7 @@ addExtraDate.addEventListener('click', () => {
   extraShiftDates = [...extraShiftDates, dateKey].sort();
   extraShiftDateInput.value = '';
   renderExtraDates();
-  queueAutoSave();
+  markUnsaved();
 });
 
 extraDateList.addEventListener('click', (event) => {
@@ -723,7 +730,7 @@ extraDateList.addEventListener('click', (event) => {
 
   extraShiftDates = extraShiftDates.filter((dateKey) => dateKey !== button.dataset.date);
   renderExtraDates();
-  queueAutoSave();
+  markUnsaved();
 });
 
 currentWeekGrid.addEventListener('click', (event) => {
@@ -740,29 +747,33 @@ currentWeekGrid.addEventListener('click', (event) => {
   }
 
   renderExtraDates();
-  queueAutoSave();
+  markUnsaved();
 });
 
 dayGrid.addEventListener('change', () => {
   renderCurrentWeekGrid();
-  queueAutoSave();
+  markUnsaved();
 });
 
 form.querySelectorAll('[name="shiftType"]').forEach((input) => {
   input.addEventListener('change', () => {
     applyShiftType(input.value);
-    queueAutoSave();
+    markUnsaved();
   });
 });
 
 form.shiftStartHour.addEventListener('change', () => {
   setShiftTypeFromHours(form.shiftStartHour.value, form.shiftEndHour.value);
-  queueAutoSave();
+  markUnsaved();
 });
 
 form.shiftEndHour.addEventListener('change', () => {
   setShiftTypeFromHours(form.shiftStartHour.value, form.shiftEndHour.value);
-  queueAutoSave();
+  markUnsaved();
+});
+
+form.schedulerEnabled.addEventListener('change', () => {
+  markUnsaved();
 });
 
 chatComboInput.addEventListener('input', () => {

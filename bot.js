@@ -115,6 +115,12 @@ if (LIST_MODE) {
   process.exit(0);
 }
 
+if (process.env.ALLOW_LEGACY_BOT !== 'true') {
+  console.error('The legacy standalone sender is disabled because it bypasses send-risk guards.');
+  console.error('Use `npm run ui` for guarded scheduling, or set ALLOW_LEGACY_BOT=true only for manual legacy testing.');
+  process.exit(1);
+}
+
 client.on('qr', async (qr) => {
   console.log('\nScan this QR code with WhatsApp:\n');
   qrcode.generate(qr, { small: true });

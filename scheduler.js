@@ -12,14 +12,19 @@ const DEFAULT_CONFIG = {
   message:
     'Patrol completed and verified all four checkpoints — East, West, South, and North. Ensured Main Entrances and truck entrance and bowery rd entrance were open as required, and Wright Street entrances were closed and confirmed secure. Conducted a thorough inspection of all areas with no unusual activity detected.',
   schedule: {
+    enabled: true,
     activeShiftDays: [1, 2, 3],
     extraShiftDates: ['2026-07-09'],
     shiftStartHour: 20,
     shiftEndHour: 8,
     firstSendMinuteMin: 20,
     firstSendMinuteMax: 30,
-    minSendIntervalMinutes: 90,
-    maxSendIntervalMinutes: 110,
+    minSendIntervalMinutes: 85,
+    maxSendIntervalMinutes: 115,
+    minMinutesBetweenSends: 75,
+    maxSendsPerDay: 12,
+    reconnectCooldownMinutes: 15,
+    staleSendGraceMinutes: 5,
   },
 };
 
@@ -40,11 +45,11 @@ function mergeConfig(config) {
 
 function loadConfig() {
   if (!fs.existsSync(CONFIG_PATH)) {
-    return deepClone(DEFAULT_CONFIG);
+    return normalizeConfig(DEFAULT_CONFIG);
   }
 
   const parsed = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
-  return mergeConfig(parsed);
+  return normalizeConfig(parsed);
 }
 
 function saveConfig(config) {
@@ -71,9 +76,15 @@ function normalizeConfig(config) {
     'firstSendMinuteMax',
     'minSendIntervalMinutes',
     'maxSendIntervalMinutes',
+    'minMinutesBetweenSends',
+    'maxSendsPerDay',
+    'reconnectCooldownMinutes',
+    'staleSendGraceMinutes',
   ].forEach((key) => {
     schedule[key] = Number(schedule[key]);
   });
+
+  schedule.enabled = schedule.enabled !== false;
 
   if (schedule.firstSendMinuteMin > schedule.firstSendMinuteMax) {
     [schedule.firstSendMinuteMin, schedule.firstSendMinuteMax] = [
@@ -89,7 +100,24 @@ function normalizeConfig(config) {
     ];
   }
 
+  schedule.firstSendMinuteMin = clampNumber(schedule.firstSendMinuteMin, 0, 59);
+  schedule.firstSendMinuteMax = clampNumber(schedule.firstSendMinuteMax, 0, 59);
+  schedule.minSendIntervalMinutes = clampNumber(schedule.minSendIntervalMinutes, 75, 240);
+  schedule.maxSendIntervalMinutes = clampNumber(schedule.maxSendIntervalMinutes, 75, 240);
+  schedule.minMinutesBetweenSends = clampNumber(schedule.minMinutesBetweenSends, 60, 240);
+  schedule.maxSendsPerDay = clampNumber(schedule.maxSendsPerDay, 1, 12);
+  schedule.reconnectCooldownMinutes = clampNumber(schedule.reconnectCooldownMinutes, 10, 60);
+  schedule.staleSendGraceMinutes = clampNumber(schedule.staleSendGraceMinutes, 1, 30);
+
   return merged;
+}
+
+function clampNumber(value, min, max) {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+
+  return Math.min(Math.max(value, min), max);
 }
 
 function formatDate(date, timezone = TIMEZONE) {
@@ -226,5 +254,6 @@ module.exports = {
   findNextSendAt,
   formatDate,
   loadConfig,
+  normalizeConfig,
   saveConfig,
 };

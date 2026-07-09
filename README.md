@@ -149,10 +149,11 @@ Run old standalone bot entrypoint:
 npm start
 ```
 
-Test old standalone bot entrypoint:
+The old standalone sender is disabled by default because it bypasses the guarded scheduler.
+Only opt into it for manual legacy testing:
 
 ```bash
-npm run test:bot
+ALLOW_LEGACY_BOT=true npm start
 ```
 
 ## Files
@@ -160,6 +161,7 @@ npm run test:bot
 - `server.js`: local UI server, WhatsApp connection, scheduler, scheduler logs
 - `scheduler.js`: shared schedule generation and config helpers
 - `config.json`: saved settings
+- `send-history.json`: local send/skip/failure history used by the guarded sender
 - `public/`: browser UI
 - `bot.js`: older standalone bot entrypoint
 - `.wwebjs_auth/`: saved WhatsApp session

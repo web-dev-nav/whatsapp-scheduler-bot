@@ -145,6 +145,37 @@ form {
   gap: 18px;
 }
 
+.enable-toggle {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  cursor: pointer;
+}
+
+.enable-toggle input {
+  width: 18px;
+  height: 18px;
+}
+
+.enable-toggle span {
+  display: grid;
+  gap: 3px;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 750;
+}
+
+.enable-toggle small {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+
 .field {
   display: grid;
   gap: 7px;

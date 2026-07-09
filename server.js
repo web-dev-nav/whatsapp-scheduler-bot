@@ -1,4 +1,5 @@
 const http = require('http');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { Client, LocalAuth } = require('whatsapp-web.js');
@@ -8,6 +9,9 @@ const { buildScheduleForWeeks, findNextSendAt, formatDate, loadConfig, saveConfi
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.PORT || 3000);
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const SEND_HISTORY_PATH = path.join(__dirname, 'send-history.json');
+const MS_PER_MINUTE = 60 * 1000;
+const MS_PER_DAY = 24 * 60 * MS_PER_MINUTE;
 const whatsappState = {
   status: 'starting',
   qrDataUrl: null,
@@ -17,6 +21,7 @@ const whatsappState = {
 let whatsappClient;
 let whatsappStarting = false;
 let schedulerTimer;
+let whatsappReadyAt = null;
 const schedulerLogs = [];
 
 function addSchedulerLog(type, message, details = {}) {
@@ -82,7 +87,131 @@ async function findTargetChat(chatName) {
   return chats.find((chat) => chat.name === chatName);
 }
 
-async function sendPatrolMessage() {
+function readSendHistory() {
+  if (!fs.existsSync(SEND_HISTORY_PATH)) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(SEND_HISTORY_PATH, 'utf8'));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    addSchedulerLog('error', 'Could not read send history. Blocking sends until the file is fixed.', {
+      error: error.message,
+    });
+    return null;
+  }
+}
+
+function writeSendHistory(history) {
+  const recentHistory = history.slice(-500);
+  fs.writeFileSync(SEND_HISTORY_PATH, `${JSON.stringify(recentHistory, null, 2)}\n`);
+}
+
+function messageHash(message) {
+  return crypto.createHash('sha256').update(message).digest('hex').slice(0, 16);
+}
+
+function sendKey(scheduledAt, chatId, hash) {
+  return `${scheduledAt.toISOString()}|${chatId}|${hash}`;
+}
+
+function countRecentSuccessfulSends(history, now) {
+  const since = now.getTime() - MS_PER_DAY;
+  return history.filter((entry) => {
+    if (entry.status !== 'sent') return false;
+    return new Date(entry.attemptedAt).getTime() >= since;
+  }).length;
+}
+
+function findLastSuccessfulSend(history) {
+  return [...history]
+    .filter((entry) => entry.status === 'sent')
+    .sort((a, b) => new Date(b.attemptedAt).getTime() - new Date(a.attemptedAt).getTime())[0];
+}
+
+function appendSendHistory(entry) {
+  const history = readSendHistory();
+
+  if (!history) {
+    return false;
+  }
+
+  history.push(entry);
+  writeSendHistory(history);
+  return true;
+}
+
+function buildHistoryEntry(status, scheduledAt, config, chat, details = {}) {
+  const hash = messageHash(config.message);
+  const chatId = chat?.id?._serialized || null;
+
+  return {
+    key: sendKey(scheduledAt, chatId || config.groupName, hash),
+    status,
+    scheduledAt: scheduledAt.toISOString(),
+    attemptedAt: new Date().toISOString(),
+    chatId,
+    chatName: chat?.name || config.groupName,
+    messageHash: hash,
+    ...details,
+  };
+}
+
+function getSendBlockReason(config, chat, scheduledAt, history, now = new Date()) {
+  const schedule = config.schedule;
+  const hash = messageHash(config.message);
+  const chatId = chat.id._serialized;
+  const key = sendKey(scheduledAt, chatId, hash);
+  const existingAttempt = history.find((entry) => entry.key === key && entry.status !== 'skipped');
+
+  if (!schedule.enabled) {
+    return 'Scheduler is disabled.';
+  }
+
+  if (!config.message.trim()) {
+    return 'Message is empty.';
+  }
+
+  if (existingAttempt) {
+    return `This scheduled message already has a ${existingAttempt.status} history entry.`;
+  }
+
+  const staleByMs = now.getTime() - scheduledAt.getTime();
+  const staleGraceMs = schedule.staleSendGraceMinutes * MS_PER_MINUTE;
+
+  if (staleByMs > staleGraceMs) {
+    return `Scheduled time is more than ${schedule.staleSendGraceMinutes} minutes old.`;
+  }
+
+  if (whatsappReadyAt) {
+    const readyCooldownMs = schedule.reconnectCooldownMinutes * MS_PER_MINUTE;
+    const readyAgeMs = now.getTime() - whatsappReadyAt.getTime();
+
+    if (readyAgeMs < readyCooldownMs) {
+      return `WhatsApp reconnected less than ${schedule.reconnectCooldownMinutes} minutes ago.`;
+    }
+  }
+
+  const lastSuccessfulSend = findLastSuccessfulSend(history);
+
+  if (lastSuccessfulSend) {
+    const minutesSinceLastSend =
+      (now.getTime() - new Date(lastSuccessfulSend.attemptedAt).getTime()) / MS_PER_MINUTE;
+
+    if (minutesSinceLastSend < schedule.minMinutesBetweenSends) {
+      return `Last successful send was less than ${schedule.minMinutesBetweenSends} minutes ago.`;
+    }
+  }
+
+  if (countRecentSuccessfulSends(history, now) >= schedule.maxSendsPerDay) {
+    return `Daily send cap of ${schedule.maxSendsPerDay} messages has been reached.`;
+  }
+
+  return null;
+}
+
+async function sendPatrolMessage(scheduledAt) {
   const config = loadConfig();
   const chat = await findTargetChat(config.groupName);
 
@@ -91,12 +220,36 @@ async function sendPatrolMessage() {
     return;
   }
 
+  const history = readSendHistory();
+
+  if (!history) {
+    return;
+  }
+
+  const blockReason = getSendBlockReason(config, chat, scheduledAt, history);
+
+  if (blockReason) {
+    appendSendHistory(buildHistoryEntry('skipped', scheduledAt, config, chat, { reason: blockReason }));
+    addSchedulerLog('info', `Skipped patrol message to "${chat.name}": ${blockReason}`);
+    return;
+  }
+
   addSchedulerLog('info', `Sending patrol message to "${chat.name}".`);
-  const sentMessage = await chat.sendMessage(config.message);
-  addSchedulerLog('success', `Message sent to "${chat.name}".`, {
-    chatName: chat.name,
-    messageId: sentMessage?.id?._serialized || sentMessage?.id?.id || null,
-  });
+
+  try {
+    const sentMessage = await chat.sendMessage(config.message);
+    const messageId = sentMessage?.id?._serialized || sentMessage?.id?.id || null;
+    appendSendHistory(buildHistoryEntry('sent', scheduledAt, config, chat, { messageId }));
+    addSchedulerLog('success', `Message sent to "${chat.name}".`, {
+      chatName: chat.name,
+      messageId,
+    });
+  } catch (error) {
+    appendSendHistory(buildHistoryEntry('failed', scheduledAt, config, chat, { error: error.message }));
+    addSchedulerLog('error', 'Failed to send patrol message. No immediate retry will be attempted.', {
+      error: error.message,
+    });
+  }
 }
 
 function scheduleNextPatrolMessage() {
@@ -108,6 +261,12 @@ function scheduleNextPatrolMessage() {
   }
 
   const config = loadConfig();
+
+  if (!config.schedule.enabled) {
+    addSchedulerLog('info', 'Scheduler is disabled. No patrol message is scheduled.');
+    return;
+  }
+
   const nextSendAt = findNextSendAt(config);
 
   if (!nextSendAt) {
@@ -122,7 +281,7 @@ function scheduleNextPatrolMessage() {
 
   schedulerTimer = setTimeout(async () => {
     try {
-      await sendPatrolMessage();
+      await sendPatrolMessage(nextSendAt);
     } catch (error) {
       addSchedulerLog('error', 'Failed to send patrol message.', { error: error.message });
     } finally {
@@ -155,15 +314,21 @@ function attachWhatsappHandlers(client) {
 
   client.on('ready', async () => {
     whatsappState.status = 'ready';
+    whatsappReadyAt = new Date();
     whatsappState.qrDataUrl = null;
     whatsappState.error = null;
     await refreshChats();
-    addSchedulerLog('info', 'WhatsApp is ready. Scheduler is active.');
+    const config = loadConfig();
+    addSchedulerLog(
+      'info',
+      `WhatsApp is ready. Scheduler cooldown is ${config.schedule.reconnectCooldownMinutes} minutes.`
+    );
     scheduleNextPatrolMessage();
   });
 
   client.on('disconnected', (reason) => {
     whatsappState.status = 'disconnected';
+    whatsappReadyAt = null;
     whatsappState.error = reason;
     addSchedulerLog('error', 'WhatsApp disconnected.', { reason });
     clearScheduler();

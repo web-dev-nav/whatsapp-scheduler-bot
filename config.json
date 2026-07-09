@@ -16,7 +16,7 @@
     "shiftEndHour": 8,
     "firstSendMinuteMin": 20,
     "firstSendMinuteMax": 30,
-    "minSendIntervalMinutes": 40,
-    "maxSendIntervalMinutes": 45
+    "minSendIntervalMinutes": 80,
+    "maxSendIntervalMinutes": 90
   }
 }
