@@ -137,7 +137,7 @@ function populateHumanControls() {
     appendOption(form.firstSendMinuteMax, minute, formatMinuteOffset(minute));
   }
 
-  for (let minute = 30; minute <= 180; minute += 5) {
+  for (let minute = 75; minute <= 180; minute += 5) {
     appendOption(form.minSendIntervalMinutes, minute, formatInterval(minute));
     appendOption(form.maxSendIntervalMinutes, minute, formatInterval(minute));
   }

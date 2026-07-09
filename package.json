@@ -4,7 +4,7 @@
   "description": "",
   "main": "bot.js",
   "scripts": {
-    "start": "node bot.js",
+    "start": "node server.js",
     "test:bot": "node bot.js --test",
     "list:schedule": "node bot.js --list",
     "ui": "node server.js"

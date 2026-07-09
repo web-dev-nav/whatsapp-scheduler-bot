@@ -19,6 +19,8 @@ const DEFAULT_CONFIG = {
     shiftEndHour: 8,
     firstSendMinuteMin: 20,
     firstSendMinuteMax: 30,
+    sendSecondMin: 8,
+    sendSecondMax: 52,
     minSendIntervalMinutes: 85,
     maxSendIntervalMinutes: 115,
     minMinutesBetweenSends: 75,
@@ -74,6 +76,8 @@ function normalizeConfig(config) {
     'shiftEndHour',
     'firstSendMinuteMin',
     'firstSendMinuteMax',
+    'sendSecondMin',
+    'sendSecondMax',
     'minSendIntervalMinutes',
     'maxSendIntervalMinutes',
     'minMinutesBetweenSends',
@@ -100,8 +104,17 @@ function normalizeConfig(config) {
     ];
   }
 
+  if (schedule.sendSecondMin > schedule.sendSecondMax) {
+    [schedule.sendSecondMin, schedule.sendSecondMax] = [
+      schedule.sendSecondMax,
+      schedule.sendSecondMin,
+    ];
+  }
+
   schedule.firstSendMinuteMin = clampNumber(schedule.firstSendMinuteMin, 0, 59);
   schedule.firstSendMinuteMax = clampNumber(schedule.firstSendMinuteMax, 0, 59);
+  schedule.sendSecondMin = clampNumber(schedule.sendSecondMin, 1, 58);
+  schedule.sendSecondMax = clampNumber(schedule.sendSecondMax, 1, 58);
   schedule.minSendIntervalMinutes = clampNumber(schedule.minSendIntervalMinutes, 75, 240);
   schedule.maxSendIntervalMinutes = clampNumber(schedule.maxSendIntervalMinutes, 75, 240);
   schedule.minMinutesBetweenSends = clampNumber(schedule.minMinutesBetweenSends, 60, 240);
@@ -183,12 +196,14 @@ function buildShiftSchedule(shiftDate, config) {
   const { schedule } = config;
   const random = seededRandom(formatDateKey(shiftDate));
   const firstMinute = randomInt(random, schedule.firstSendMinuteMin, schedule.firstSendMinuteMax);
+  const firstSecond = randomInt(random, schedule.sendSecondMin, schedule.sendSecondMax);
   const shiftStart = new Date(
     shiftDate.getFullYear(),
     shiftDate.getMonth(),
     shiftDate.getDate(),
     schedule.shiftStartHour,
-    firstMinute
+    firstMinute,
+    firstSecond
   );
   const shiftEnd = new Date(
     shiftDate.getFullYear(),
@@ -208,6 +223,7 @@ function buildShiftSchedule(shiftDate, config) {
       schedule.maxSendIntervalMinutes
     );
     sendAt = new Date(sendAt.getTime() + intervalMinutes * MS_PER_MINUTE);
+    sendAt.setSeconds(randomInt(random, schedule.sendSecondMin, schedule.sendSecondMax), 0);
   }
 
   return sends;

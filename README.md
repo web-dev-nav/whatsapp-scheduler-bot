@@ -143,17 +143,17 @@ Preview schedule:
 npm run list:schedule
 ```
 
-Run old standalone bot entrypoint:
+Start guarded scheduler:
 
 ```bash
 npm start
 ```
 
-The old standalone sender is disabled by default because it bypasses the guarded scheduler.
-Only opt into it for manual legacy testing:
+The old standalone sender is disabled because it bypasses the guarded scheduler.
+Use the list command only for schedule previews:
 
 ```bash
-ALLOW_LEGACY_BOT=true npm start
+npm run list:schedule
 ```
 
 ## Files

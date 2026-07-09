@@ -3,3 +3,4 @@ node_modules/
 .wwebjs_cache/
 npm-debug.log*
 latest-qr.png
+send-history.json
