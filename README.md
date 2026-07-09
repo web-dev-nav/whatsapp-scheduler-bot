@@ -1,152 +1,172 @@
-# WhatsApp Patrol Check-In Scheduler
+# WhatsApp Patrol Scheduler
 
-This is a simple Node.js bot that sends randomized patrol completion messages to one WhatsApp group during configured overnight patrol windows.
+Local WhatsApp patrol scheduler with a browser UI, QR login, schedule preview, and live scheduler logs.
+
+This project uses `whatsapp-web.js`, which automates WhatsApp Web through a linked-device session. It is not the official WhatsApp Business API.
 
 ## Requirements
 
 - Node.js 18 or newer
-- A WhatsApp account that is already a member of the target group
-- Your computer must stay on while the bot is running
+- A WhatsApp account that can access the target group or chat
+- The computer/server must stay awake and online while the scheduler is running
 
-Your current Node version was checked during setup and is new enough.
-
-## Files
-
-- `bot.js` - the bot code
-- `config.json` - group, message, and schedule settings
-- `server.js` - local settings UI
-- `public/` - browser UI files
-- `.wwebjs_auth/` - saved WhatsApp login session after you scan the QR code
-- `.wwebjs_cache/` - browser cache used by WhatsApp Web
-
-## First Setup
-
-1. Open this folder in Terminal:
-
-   ```bash
-   cd /Users/navjotsingh/Github/whatsapp-scheduler-bot
-   ```
-
-2. Start the local settings UI:
-
-   ```bash
-   npm run ui
-   ```
-
-3. Open this URL in your browser:
-
-   ```text
-   http://127.0.0.1:3000
-   ```
-
-4. If the WhatsApp QR code appears in the UI, scan it from WhatsApp:
-
-   Open WhatsApp > Settings > Linked Devices > Link a Device
-
-5. Once WhatsApp is connected, choose the target group or chat from the dropdown, then set the message text, active days, extra shift dates, and timing ranges.
-
-6. Start test mode:
-
-   ```bash
-   npm run test:bot
-   ```
-
-7. If a QR code appears in the terminal, scan it. The bot also saves the latest QR code as `latest-qr.png` in this folder, which you can open and scan instead:
-
-   Open WhatsApp > Settings > Linked Devices > Link a Device
-
-   Then point your phone camera at the QR code in Terminal.
-
-8. After WhatsApp connects, the bot looks for the configured chat name. In test mode, it sends this message 60 seconds after startup:
-
-   ```text
-   ✅ Test message from bot
-   ```
-
-The QR scan is normally only needed once. The login session is saved in `.wwebjs_auth/`.
-
-## Settings UI
-
-Start the local UI:
+## Start The App
 
 ```bash
+cd /Users/navjotsingh/Github/whatsapp-scheduler-bot
+npm install
 npm run ui
 ```
 
-Then open:
+Open:
 
 ```text
 http://127.0.0.1:3000
 ```
 
-The UI can change:
+`npm run ui` starts the browser UI, WhatsApp connection, and scheduled sender in one process.
 
-- WhatsApp group or chat
-- Patrol message text
-- Active weekdays
-- One-time extra shift dates, shown with human-readable month names
-- Shift start and end hour
-- First message minute range
-- Random interval range
+## First Login
 
-The UI is local-only by default and binds to `127.0.0.1`.
+If WhatsApp is not linked yet, the UI shows a centered QR code.
 
-Use **Logout session** in the WhatsApp Connection panel to clear the current linked session and force the UI back through the QR-code setup flow.
+Scan it from your phone:
 
-## Preview The Schedule
+```text
+WhatsApp > Settings > Linked Devices > Link a Device
+```
 
-Run:
+After the scan succeeds, the Patrol Scheduler UI appears.
+
+The session is saved in:
+
+```text
+.wwebjs_auth/
+```
+
+Use **Logout session** in the UI to clear the linked session and force a fresh QR login.
+
+## Main UI Controls
+
+- **WhatsApp group or chat**: searchable picker for the target group/chat.
+- **Shift type**:
+  - Day shift: `8:00 AM` to `8:00 PM`
+  - Night shift: `8:00 PM` to `8:00 AM`
+- **Weekly shift start days**: recurring weekly schedule.
+- **This week only**: temporary shifts for the current week without changing the recurring pattern.
+- **Other one-time shift dates**: specific exception dates outside the current week.
+- **Patrol starts / Patrol ends**: custom start/end hours.
+- **First message earliest/latest**: random first-message minute window after shift start.
+- **Shortest/Longest gap**: random interval range between patrol messages.
+- **Message**: WhatsApp message text.
+
+Click **Save settings** to save changes. The button and header confirm when settings are saved.
+
+## How Shift Days Work
+
+The selected day is the day the shift starts.
+
+Example night shift:
+
+```text
+Monday selected
+8:00 PM to 8:00 AM
+```
+
+This means:
+
+```text
+Monday night through Tuesday morning
+```
+
+For a one-time Thursday shift this week only, use **This week only** instead of selecting Thursday as a weekly day.
+
+## Schedule Preview
+
+The UI shows:
+
+- Next message
+- Upcoming shifts grouped by shift window
+- Past shifts, expandable
+
+For overnight shifts, after-midnight messages are grouped under the shift start day and show the actual weekday beside the time.
+
+You can also print the schedule in the terminal:
 
 ```bash
 npm run list:schedule
 ```
 
-This prints the same schedule the bot and UI use, without connecting to WhatsApp or sending messages.
+This does not send messages.
 
-## If The Group Is Not Found
+## Scheduler Log
 
-The bot prints all available WhatsApp group names and exits.
+The UI includes a **Scheduler Log** panel that shows:
 
-Copy the exact group name from that list into the UI or `config.json`, then run test mode again:
+- WhatsApp ready state
+- Next scheduled message time
+- Message send attempts
+- Successful sends
+- WhatsApp message ID when available
+- Send errors
+
+Use this panel to verify that a scheduled message was actually sent.
+
+## Important Runtime Behavior
+
+The scheduler only runs while the Node process is running.
+
+If your laptop shuts down, sleeps, loses internet, or the terminal process stops, messages will not send.
+
+For continuous operation, run it on a server/VPS/EC2 instance and use a process manager such as `pm2`.
+
+Example:
+
+```bash
+npm install -g pm2
+pm2 start server.js --name whatsapp-patrol-scheduler
+pm2 save
+pm2 startup
+```
+
+## Useful Commands
+
+Start UI and scheduler:
+
+```bash
+npm run ui
+```
+
+Preview schedule:
+
+```bash
+npm run list:schedule
+```
+
+Run old standalone bot entrypoint:
+
+```bash
+npm start
+```
+
+Test old standalone bot entrypoint:
 
 ```bash
 npm run test:bot
 ```
 
-## Run The Real Scheduler
+## Files
 
-After test mode works, start the normal scheduler:
+- `server.js`: local UI server, WhatsApp connection, scheduler, scheduler logs
+- `scheduler.js`: shared schedule generation and config helpers
+- `config.json`: saved settings
+- `public/`: browser UI
+- `bot.js`: older standalone bot entrypoint
+- `.wwebjs_auth/`: saved WhatsApp session
+- `.wwebjs_cache/`: WhatsApp Web cache
 
-```bash
-npm start
-```
+## Safety Note
 
-The bot reads `config.json`, finds the next configured send time, sends the patrol message, and then schedules the next one. While running, it re-checks the config about once per minute so UI changes can take effect without restarting in most cases.
+This project uses an unofficial WhatsApp Web automation library. It can work technically, but it is not the same as Meta's official WhatsApp Business Platform API and may carry account risk.
 
-## Change Message Texts
-
-Use the local UI or edit `config.json`.
-
-## Stop The Bot
-
-In Terminal, press:
-
-```text
-Ctrl+C
-```
-
-## Start Again Later
-
-Run:
-
-```bash
-npm start
-```
-
-If the saved login is still valid, no QR code should be needed.
-
-## Notes
-
-- Do not delete `.wwebjs_auth/` unless you want to log in again.
-- Do not hardcode a group ID. This bot always finds the group by name at startup.
-- If Chromium fails to launch, copy the full terminal error so the missing system dependency or OS-specific issue can be diagnosed.
+For production/commercial messaging, use the official WhatsApp Business Platform where possible.
