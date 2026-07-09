@@ -1,0 +1,22 @@
+{
+  "groupName": "LADO RANI",
+  "timezone": "America/Toronto",
+  "message": "Patrol completed and verified all four checkpoints — East, West, South, and North. Ensured Main Entrances and truck entrance and bowery rd entrance were open as required, and Wright Street entrances were closed and confirmed secure. Conducted a thorough inspection of all areas with no unusual activity detected.",
+  "schedule": {
+    "activeShiftDays": [
+      1,
+      2,
+      3
+    ],
+    "extraShiftDates": [
+      "2026-07-09",
+      "2026-07-23"
+    ],
+    "shiftStartHour": 20,
+    "shiftEndHour": 8,
+    "firstSendMinuteMin": 20,
+    "firstSendMinuteMax": 30,
+    "minSendIntervalMinutes": 40,
+    "maxSendIntervalMinutes": 45
+  }
+}

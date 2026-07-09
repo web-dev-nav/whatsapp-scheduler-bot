@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Patrol Scheduler</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main>
+      <section class="login-screen" id="loginScreen">
+        <div class="login-panel">
+          <h1>WhatsApp Connection</h1>
+          <p id="loginStatus">Starting WhatsApp...</p>
+          <img id="qrCode" class="qr-code" alt="WhatsApp login QR code" hidden />
+        </div>
+      </section>
+
+      <section class="app-shell" id="appShell" hidden>
+        <div class="settings-panel">
+          <div class="panel-header">
+            <h1>Patrol Scheduler</h1>
+            <p id="saveStatus">Loading settings...</p>
+          </div>
+
+          <section class="whatsapp-card" id="whatsappCard">
+            <div>
+              <h2>WhatsApp Connection</h2>
+              <p id="whatsappStatus">Starting WhatsApp...</p>
+            </div>
+            <button class="danger-button" id="logoutWhatsapp" type="button">Logout session</button>
+          </section>
+
+          <form id="settingsForm">
+            <div class="field">
+              <span>WhatsApp group or chat</span>
+              <div class="combo" id="chatCombo">
+                <input id="chatComboInput" type="search" autocomplete="off" placeholder="Search and select a group or chat" />
+                <input id="groupName" name="groupName" type="hidden" />
+                <div class="combo-menu" id="chatComboMenu" hidden></div>
+              </div>
+            </div>
+
+            <label class="field">
+              <span>Timezone</span>
+              <input id="timezone" name="timezone" type="text" autocomplete="off" />
+            </label>
+
+            <fieldset>
+              <legend>Shift type</legend>
+              <div class="shift-type-grid">
+                <label class="shift-type">
+                  <input type="radio" name="shiftType" value="day" />
+                  <span>Day shift</span>
+                  <small id="dayShiftTime">8:00 AM to 8:00 PM</small>
+                </label>
+                <label class="shift-type">
+                  <input type="radio" name="shiftType" value="night" />
+                  <span>Night shift</span>
+                  <small id="nightShiftTime">8:00 PM to 8:00 AM</small>
+                </label>
+              </div>
+            </fieldset>
+
+            <fieldset>
+              <legend>Weekly shift start days</legend>
+              <p class="field-help">
+                Select recurring weekly start days, then click Save settings. For example, Monday means Monday night through Tuesday morning.
+              </p>
+              <div class="day-grid" id="dayGrid"></div>
+            </fieldset>
+
+            <fieldset>
+              <legend>This week only</legend>
+              <p class="field-help">
+                Add temporary shifts for this week without changing the weekly pattern.
+              </p>
+              <div class="week-grid" id="currentWeekGrid"></div>
+            </fieldset>
+
+            <div class="row">
+              <label class="field">
+                <span>Patrol starts</span>
+                <select id="shiftStartHour" name="shiftStartHour"></select>
+              </label>
+              <label class="field">
+                <span>Patrol ends</span>
+                <select id="shiftEndHour" name="shiftEndHour"></select>
+              </label>
+            </div>
+
+            <div class="row">
+              <label class="field">
+                <span>First message earliest</span>
+                <select id="firstSendMinuteMin" name="firstSendMinuteMin"></select>
+              </label>
+              <label class="field">
+                <span>First message latest</span>
+                <select id="firstSendMinuteMax" name="firstSendMinuteMax"></select>
+              </label>
+            </div>
+
+            <div class="row">
+              <label class="field">
+                <span>Shortest gap</span>
+                <select id="minSendIntervalMinutes" name="minSendIntervalMinutes"></select>
+              </label>
+              <label class="field">
+                <span>Longest gap</span>
+                <select id="maxSendIntervalMinutes" name="maxSendIntervalMinutes"></select>
+              </label>
+            </div>
+
+            <div class="field">
+              <span>Other one-time shift dates</span>
+              <p class="field-help">
+                Optional. Use this for a specific date outside the current week.
+              </p>
+              <div class="date-adder">
+                <input id="extraShiftDateInput" type="date" />
+                <button class="secondary-button" id="addExtraDate" type="button">Add date</button>
+              </div>
+              <div class="date-list" id="extraDateList"></div>
+            </div>
+
+            <label class="field">
+              <span>Message</span>
+              <textarea id="message" name="message" rows="6"></textarea>
+            </label>
+
+            <button class="primary-button" id="saveSettingsButton" type="submit">Save settings</button>
+          </form>
+        </div>
+
+        <div class="preview-panel">
+          <div class="panel-header">
+            <h2>Schedule Preview</h2>
+            <p>Generated from saved settings</p>
+          </div>
+          <div class="preview-list" id="previewList"></div>
+
+          <div class="log-panel">
+            <div class="panel-header">
+              <h2>Scheduler Log</h2>
+              <p>Live send activity</p>
+            </div>
+            <div class="log-list" id="schedulerLogList"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
