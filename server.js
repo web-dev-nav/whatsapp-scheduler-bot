@@ -14,6 +14,7 @@ const {
   formatDate,
   loadConfigFromPath,
   saveConfigToPath,
+  normalizeConfig,
 } = require('./scheduler');
 
 const HOST = process.env.HOST || '127.0.0.1';
@@ -202,17 +203,53 @@ function chatDisplayName(chat) {
   return chat.name || chat.formattedTitle || chat.id.user || chat.id._serialized;
 }
 
+// Resilient chat enumeration.
+//
+// whatsapp-web.js `client.getChats()` serializes every chat, which triggers an
+// IndexedDB read that current WhatsApp Web builds reject
+// ("DataError: Failed to execute 'get' on 'IDBObjectStore'", surfaced as the
+// minified "r"). We only need id/name/isGroup, so we read those fields straight
+// off the in-memory chat models and skip the broken serialization entirely.
+async function extractChats(runtime) {
+  if (!runtime.client || !runtime.client.pupPage) return [];
+
+  const chats = await runtime.client.pupPage.evaluate(async () => {
+    const collection = window.require('WAWebCollections').Chat.getModelsArray();
+
+    return collection
+      .map((chat) => {
+        let name = null;
+        try { name = chat.formattedTitle; } catch (error) { /* ignore */ }
+        if (!name) { try { name = chat.name; } catch (error) { /* ignore */ } }
+        if (!name && chat.contact) {
+          try {
+            name = chat.contact.name || chat.contact.pushname || chat.contact.formattedName;
+          } catch (error) { /* ignore */ }
+        }
+
+        let id = null;
+        try { id = chat.id && (chat.id._serialized || String(chat.id)); } catch (error) { /* ignore */ }
+        if (!name && chat.id) {
+          try { name = chat.id.user || chat.id._serialized; } catch (error) { /* ignore */ }
+        }
+
+        let isGroup = false;
+        try { isGroup = (chat.id && chat.id.server === 'g.us') || Boolean(chat.isGroup); } catch (error) { /* ignore */ }
+
+        return { id, name, isGroup };
+      })
+      .filter((chat) => chat.id);
+  });
+
+  return chats;
+}
+
 async function refreshChats(runtime) {
   if (!runtime.client) return;
 
   try {
-    const chats = await runtime.client.getChats();
+    const chats = await extractChats(runtime);
     runtime.state.chats = chats
-      .map((chat) => ({
-        id: chat.id._serialized,
-        name: chatDisplayName(chat),
-        isGroup: Boolean(chat.isGroup),
-      }))
       .filter((chat) => chat.name)
       .sort((a, b) => {
         if (a.isGroup !== b.isGroup) return a.isGroup ? -1 : 1;
@@ -247,8 +284,20 @@ function clearWhatsappRestart(runtime) {
 }
 
 async function findTargetChat(runtime, chatName) {
-  const chats = await runtime.client.getChats();
-  return chats.find((chat) => chat.name === chatName);
+  const chats = await extractChats(runtime);
+  const match = chats.find((chat) => chat.name === chatName);
+
+  if (!match) return null;
+
+  // Return a lightweight chat wrapper. Sending goes through
+  // client.sendMessage(id, ...), which resolves the chat via the working
+  // WWebJS.getChat/sendMessage path rather than the broken getChats serializer.
+  return {
+    id: { _serialized: match.id },
+    name: match.name,
+    isGroup: match.isGroup,
+    sendMessage: (content, options) => runtime.client.sendMessage(match.id, content, options),
+  };
 }
 
 function readSendHistory(runtime) {
@@ -746,6 +795,16 @@ const server = http.createServer(async (request, response) => {
       const config = saveConfigToPath(runtime.paths.configPath, payload.config);
       scheduleNextPatrolMessage(runtime);
       sendJson(response, 200, { account: runtime.account, config, preview: buildPreview(config) });
+      return;
+    }
+
+    // Dry-run preview: compute the schedule for a proposed config WITHOUT saving it,
+    // so the UI can show the effect of timing changes live before the user commits.
+    if (request.method === 'POST' && pathname === '/api/config/preview') {
+      const body = await readRequestBody(request);
+      const payload = JSON.parse(body);
+      const config = normalizeConfig(payload.config);
+      sendJson(response, 200, { config, preview: buildPreview(config) });
       return;
     }
 

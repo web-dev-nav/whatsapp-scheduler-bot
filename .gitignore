@@ -7,3 +7,5 @@ accounts.json
 npm-debug.log*
 latest-qr.png
 send-history.json
+
+accounts/

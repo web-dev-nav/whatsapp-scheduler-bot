@@ -8,173 +8,233 @@
   </head>
   <body>
     <main>
+      <!-- ============ CONNECT / LOGIN ============ -->
       <section class="login-screen" id="loginScreen">
         <div class="login-panel">
-          <h1>WhatsApp Connection</h1>
-          <div class="account-card compact">
-            <label class="field">
-              <span>Account</span>
-              <select id="loginAccountSelect"></select>
-            </label>
-            <form class="account-add-form" id="loginAccountForm">
-              <input id="loginAccountName" type="text" autocomplete="off" placeholder="Add account name" />
-              <button class="secondary-button" type="submit">Add</button>
-            </form>
-          </div>
-          <p id="loginStatus">Starting WhatsApp...</p>
+          <div class="brand-mark">🛡️</div>
+          <h1>Connect WhatsApp</h1>
+          <p class="login-lead" id="loginStatus">Starting WhatsApp…</p>
+
           <img id="qrCode" class="qr-code" alt="WhatsApp login QR code" hidden />
+
+          <ol class="scan-steps" id="scanSteps">
+            <li>Open <strong>WhatsApp</strong> on your phone</li>
+            <li>Tap <strong>Settings → Linked devices</strong></li>
+            <li>Tap <strong>Link a device</strong> and scan the code above</li>
+          </ol>
+
+          <details class="account-switcher">
+            <summary>Connecting a different phone?</summary>
+            <div class="account-switcher-body">
+              <label class="field">
+                <span>Which account?</span>
+                <select id="loginAccountSelect"></select>
+              </label>
+              <form class="inline-add" id="loginAccountForm">
+                <input id="loginAccountName" type="text" autocomplete="off" placeholder="New account name" />
+                <button class="btn btn-ghost" type="submit">Add</button>
+              </form>
+            </div>
+          </details>
         </div>
       </section>
 
+      <!-- ============ APP ============ -->
       <section class="app-shell" id="appShell" hidden>
-        <div class="settings-panel">
-          <div class="panel-header">
-            <h1>Patrol Scheduler</h1>
-            <p id="saveStatus">Loading settings...</p>
+        <header class="app-header">
+          <div class="brand">
+            <span class="brand-mark small">🛡️</span>
+            <span>Patrol Scheduler</span>
           </div>
-
-          <section class="whatsapp-card" id="whatsappCard">
-            <div>
-              <h2>WhatsApp Connection</h2>
-              <p id="whatsappStatus">Starting WhatsApp...</p>
-            </div>
-            <div class="account-card">
+          <div class="account-area">
+            <button class="account-chip" id="accountMenuButton" type="button" aria-expanded="false">
+              <span class="dot dot-ok" id="connectionDot"></span>
+              <span id="accountChipName">main</span>
+              <span class="chip-caret">▾</span>
+            </button>
+            <div class="account-menu" id="accountMenu" hidden>
+              <p class="menu-status" id="whatsappStatus">Connected</p>
               <label class="field">
                 <span>Sending account</span>
                 <select id="accountSelect"></select>
               </label>
-              <form class="account-add-form" id="accountForm">
-                <input id="accountName" type="text" autocomplete="off" placeholder="Add friend, staff, or backup account" />
-                <button class="secondary-button" type="submit">Add account</button>
+              <form class="inline-add" id="accountForm">
+                <input id="accountName" type="text" autocomplete="off" placeholder="Add another account" />
+                <button class="btn btn-ghost" type="submit">Add</button>
               </form>
+              <button class="btn btn-danger-ghost" id="logoutWhatsapp" type="button">Log out this account</button>
             </div>
-            <button class="danger-button" id="logoutWhatsapp" type="button">Logout session</button>
-          </section>
+          </div>
+        </header>
 
-          <form id="settingsForm">
-            <label class="enable-toggle">
-              <input id="schedulerEnabled" name="schedulerEnabled" type="checkbox" />
-              <span>
-                Automation enabled
-                <small>When off, schedules are previewed but no WhatsApp messages are sent.</small>
-              </span>
-            </label>
+        <!-- ---------- DASHBOARD (summary) ---------- -->
+        <section class="dashboard" id="dashboard" hidden>
+          <div class="summary-card" id="summaryCard">
+            <div class="summary-top">
+              <span class="summary-badge" id="summaryBadge">All set</span>
+            </div>
+            <p class="summary-text" id="summaryText"></p>
 
-            <div class="field">
-              <span>WhatsApp group or chat</span>
-              <div class="combo" id="chatCombo">
-                <input id="chatComboInput" type="search" autocomplete="off" placeholder="Search and select a group or chat" />
-                <input id="groupName" name="groupName" type="hidden" />
-                <div class="combo-menu" id="chatComboMenu" hidden></div>
+            <div class="autosend" id="autosendRow">
+              <label class="switch">
+                <input type="checkbox" id="dashEnableToggle" />
+                <span class="switch-track"><span class="switch-thumb"></span></span>
+              </label>
+              <div class="autosend-copy">
+                <strong id="autosendTitle">Automatic sending is on</strong>
+                <small id="autosendHint">Messages will be sent for you at the scheduled times.</small>
               </div>
             </div>
 
-            <label class="field">
-              <span>Timezone</span>
-              <input id="timezone" name="timezone" type="text" autocomplete="off" />
-            </label>
+            <div class="next-send" id="nextSendCard" hidden>
+              <span class="next-label">Next message</span>
+              <time id="nextSendTime"></time>
+            </div>
 
-            <fieldset>
-              <legend>Shift type</legend>
+            <button class="btn btn-primary btn-block" id="editSetupButton" type="button">Edit setup</button>
+          </div>
+
+          <section class="card">
+            <div class="card-head">
+              <h2>Upcoming messages</h2>
+              <p>Based on your saved setup</p>
+            </div>
+            <div class="preview-list" id="previewList"></div>
+          </section>
+
+          <section class="card">
+            <div class="card-head">
+              <h2>Activity</h2>
+              <p>Recent sends &amp; connection events</p>
+            </div>
+            <div class="log-list" id="schedulerLogList"></div>
+          </section>
+        </section>
+
+        <!-- ---------- WIZARD (guided setup) ---------- -->
+        <section class="wizard" id="wizard" hidden>
+          <div class="wizard-head">
+            <button class="wizard-close" id="wizardClose" type="button" aria-label="Close setup">✕</button>
+            <div class="progress" id="wizardProgress"></div>
+            <p class="wizard-step-label" id="wizardStepLabel">Step 1 of 5</p>
+          </div>
+
+          <div class="wizard-body">
+            <!-- Step 1: chat -->
+            <div class="wizard-step" data-step="0">
+              <h2>Who gets the messages?</h2>
+              <p class="step-lead">Pick the WhatsApp group or chat the patrol updates should go to.</p>
+              <div class="combo" id="chatCombo">
+                <input id="chatComboInput" type="search" autocomplete="off" placeholder="🔍  Search your groups — or type the exact name" />
+                <input id="groupName" type="hidden" />
+                <div class="combo-menu" id="chatComboMenu" hidden></div>
+              </div>
+              <p class="chat-hint" id="chatHint"></p>
+            </div>
+
+            <!-- Step 2: days -->
+            <div class="wizard-step" data-step="1" hidden>
+              <h2>Which days?</h2>
+              <p class="step-lead">Choose the days a shift <em>starts</em>. This repeats every week.</p>
+              <div class="day-grid" id="dayGrid"></div>
+
+              <details class="soft-details">
+                <summary>Add a one-off date for this week</summary>
+                <div class="soft-details-body">
+                  <p class="hint">Tap a day to add a single extra shift that isn't part of your weekly routine.</p>
+                  <div class="week-grid" id="currentWeekGrid"></div>
+                  <div class="date-adder">
+                    <input id="extraShiftDateInput" type="date" />
+                    <button class="btn btn-ghost" id="addExtraDate" type="button">Add date</button>
+                  </div>
+                  <div class="date-list" id="extraDateList"></div>
+                </div>
+              </details>
+            </div>
+
+            <!-- Step 3: shift -->
+            <div class="wizard-step" data-step="2" hidden>
+              <h2>Day or night shift?</h2>
+              <p class="step-lead">We'll spread the messages naturally across these hours.</p>
               <div class="shift-type-grid">
                 <label class="shift-type">
                   <input type="radio" name="shiftType" value="day" />
-                  <span>Day shift</span>
+                  <span class="shift-emoji">☀️</span>
+                  <strong>Day</strong>
                   <small id="dayShiftTime">8:00 AM to 8:00 PM</small>
                 </label>
                 <label class="shift-type">
                   <input type="radio" name="shiftType" value="night" />
-                  <span>Night shift</span>
+                  <span class="shift-emoji">🌙</span>
+                  <strong>Night</strong>
                   <small id="nightShiftTime">8:00 PM to 8:00 AM</small>
                 </label>
               </div>
-            </fieldset>
-
-            <fieldset>
-              <legend>Weekly shift start days</legend>
-              <p class="field-help">
-                Select recurring weekly start days, then click Save settings. For example, Monday means Monday night through Tuesday morning.
-              </p>
-              <div class="day-grid" id="dayGrid"></div>
-            </fieldset>
-
-            <fieldset>
-              <legend>This week only</legend>
-              <p class="field-help">
-                Add temporary shifts for this week without changing the weekly pattern.
-              </p>
-              <div class="week-grid" id="currentWeekGrid"></div>
-            </fieldset>
-
-            <div class="row">
-              <label class="field">
-                <span>Patrol starts</span>
-                <select id="shiftStartHour" name="shiftStartHour"></select>
-              </label>
-              <label class="field">
-                <span>Patrol ends</span>
-                <select id="shiftEndHour" name="shiftEndHour"></select>
-              </label>
             </div>
 
-            <div class="row">
-              <label class="field">
-                <span>First message earliest</span>
-                <select id="firstSendMinuteMin" name="firstSendMinuteMin"></select>
-              </label>
-              <label class="field">
-                <span>First message latest</span>
-                <select id="firstSendMinuteMax" name="firstSendMinuteMax"></select>
-              </label>
+            <!-- Step 4: message -->
+            <div class="wizard-step" data-step="3" hidden>
+              <h2>What should it say?</h2>
+              <p class="step-lead">This exact message is sent each time. Keep it natural.</p>
+              <textarea id="message" rows="7" placeholder="e.g. Patrol completed and all checkpoints verified secure."></textarea>
             </div>
 
-            <div class="row">
-              <label class="field">
-                <span>Shortest gap</span>
-                <select id="minSendIntervalMinutes" name="minSendIntervalMinutes"></select>
-              </label>
-              <label class="field">
-                <span>Longest gap</span>
-                <select id="maxSendIntervalMinutes" name="maxSendIntervalMinutes"></select>
-              </label>
-            </div>
+            <!-- Step 5: review -->
+            <div class="wizard-step" data-step="4" hidden>
+              <h2>Review &amp; turn on</h2>
+              <div class="review-summary" id="reviewSummary"></div>
 
-            <div class="field">
-              <span>Other one-time shift dates</span>
-              <p class="field-help">
-                Optional. Use this for a specific date outside the current week.
-              </p>
-              <div class="date-adder">
-                <input id="extraShiftDateInput" type="date" />
-                <button class="secondary-button" id="addExtraDate" type="button">Add date</button>
+              <div class="autosend review-autosend">
+                <label class="switch">
+                  <input type="checkbox" id="wizardEnableToggle" />
+                  <span class="switch-track"><span class="switch-thumb"></span></span>
+                </label>
+                <div class="autosend-copy">
+                  <strong>Send automatically</strong>
+                  <small>Leave off to preview the schedule without sending anything.</small>
+                </div>
               </div>
-              <div class="date-list" id="extraDateList"></div>
+
+              <details class="soft-details" id="advancedCard">
+                <summary>Fine-tune timing (optional)</summary>
+                <div class="soft-details-body advanced-content">
+                  <p class="hint">These already have sensible defaults — only change them if you need to.</p>
+                  <label class="field">
+                    <span>Timezone</span>
+                    <input id="timezone" type="text" autocomplete="off" />
+                  </label>
+                  <div class="row">
+                    <label class="field">
+                      <span>Shift starts</span>
+                      <select id="shiftStartHour"></select>
+                    </label>
+                    <label class="field">
+                      <span>Shift ends</span>
+                      <select id="shiftEndHour"></select>
+                    </label>
+                  </div>
+                  <label class="field">
+                    <span>First message</span>
+                    <select id="firstSendAfter"></select>
+                  </label>
+                  <label class="field">
+                    <span>Time between messages</span>
+                    <select id="sendEvery"></select>
+                  </label>
+                  <p class="hint">Exact times are randomized a little around these so the messages look natural, not automated.</p>
+                  <div class="timing-preview" id="timingPreview"></div>
+                </div>
+              </details>
             </div>
-
-            <label class="field">
-              <span>Message</span>
-              <textarea id="message" name="message" rows="6"></textarea>
-            </label>
-
-            <button class="primary-button" id="saveSettingsButton" type="submit">Save settings</button>
-          </form>
-        </div>
-
-        <div class="preview-panel">
-          <div class="panel-header">
-            <h2>Schedule Preview</h2>
-            <p>Generated from saved settings</p>
           </div>
-          <div class="preview-list" id="previewList"></div>
 
-          <div class="log-panel">
-            <div class="panel-header">
-              <h2>Scheduler Log</h2>
-              <p>Live send activity</p>
-            </div>
-            <div class="log-list" id="schedulerLogList"></div>
+          <div class="wizard-nav">
+            <button class="btn btn-ghost" id="wizardBack" type="button">Back</button>
+            <p class="save-hint" id="saveStatus"></p>
+            <button class="btn btn-primary" id="wizardNext" type="button">Next</button>
+            <button class="btn btn-primary" id="wizardFinish" type="button" hidden>Save &amp; done</button>
           </div>
-        </div>
+        </section>
       </section>
     </main>
 
