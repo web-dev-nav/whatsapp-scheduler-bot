@@ -39,11 +39,15 @@ DATA_DIR=/home/forge/.whatsapp-scheduler-bot
 
 Runtime files stored there:
 
+- `accounts.json`
 - `config.json`
 - `send-history.json`
 - `.wwebjs_auth/`
+- `accounts/<account-id>/config.json`
+- `accounts/<account-id>/send-history.json`
+- `accounts/<account-id>/.wwebjs_auth/`
 
-Do not delete `.wwebjs_auth/` unless you want to force a fresh WhatsApp QR login.
+Do not delete any `.wwebjs_auth/` folder unless you want to force a fresh WhatsApp QR login for that account.
 
 ## 4. Deploy Script
 
@@ -95,5 +99,15 @@ Open the domain, scan the QR code with:
 ```text
 WhatsApp > Settings > Linked Devices > Link a Device
 ```
+
+The app supports multiple WhatsApp sender accounts in one Forge daemon:
+
+1. Open the account selector.
+2. Add an account name, such as `Navjot` or `Friend`.
+3. Select that account.
+4. Scan the QR code for that WhatsApp account.
+5. Save that account's target chat, message, and schedule.
+
+Each account has its own WhatsApp session, schedule config, send history, chat list, and scheduler timer. Keep the Forge daemon process count at `1`; the one Node process manages all accounts.
 
 Keep the daemon running. Scheduled messages only send while the AWS instance and daemon are online.

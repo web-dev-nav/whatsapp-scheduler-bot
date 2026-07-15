@@ -51,29 +51,37 @@ function mergeConfig(config) {
 }
 
 function loadConfig() {
-  ensureConfigPath();
-
-  if (!fs.existsSync(CONFIG_PATH)) {
-    return normalizeConfig(DEFAULT_CONFIG);
-  }
-
-  const parsed = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
-  return normalizeConfig(parsed);
+  return loadConfigFromPath(CONFIG_PATH);
 }
 
 function saveConfig(config) {
-  ensureConfigPath();
+  return saveConfigToPath(CONFIG_PATH, config);
+}
+
+function loadConfigFromPath(configPath) {
+  ensureConfigPath(configPath);
+
+  if (!fs.existsSync(configPath)) {
+    return normalizeConfig(DEFAULT_CONFIG);
+  }
+
+  const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  return normalizeConfig(parsed);
+}
+
+function saveConfigToPath(configPath, config) {
+  ensureConfigPath(configPath);
 
   const normalized = normalizeConfig(config);
-  fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(normalized, null, 2)}\n`);
+  fs.writeFileSync(configPath, `${JSON.stringify(normalized, null, 2)}\n`);
   return normalized;
 }
 
-function ensureConfigPath() {
-  fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
+function ensureConfigPath(configPath) {
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
 
-  if (CONFIG_PATH !== REPO_CONFIG_PATH && !fs.existsSync(CONFIG_PATH) && fs.existsSync(REPO_CONFIG_PATH)) {
-    fs.copyFileSync(REPO_CONFIG_PATH, CONFIG_PATH);
+  if (configPath !== REPO_CONFIG_PATH && !fs.existsSync(configPath) && fs.existsSync(REPO_CONFIG_PATH)) {
+    fs.copyFileSync(REPO_CONFIG_PATH, configPath);
   }
 }
 
@@ -287,6 +295,8 @@ module.exports = {
   findNextSendAt,
   formatDate,
   loadConfig,
+  loadConfigFromPath,
   normalizeConfig,
   saveConfig,
+  saveConfigToPath,
 };

@@ -289,6 +289,22 @@ textarea:focus {
   font-size: 16px;
 }
 
+.account-card {
+  display: grid;
+  gap: 10px;
+}
+
+.account-card.compact {
+  width: 100%;
+  padding-top: 4px;
+}
+
+.account-add-form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+}
+
 .qr-code {
   width: min(100%, 320px);
   border: 1px solid var(--border);
@@ -771,6 +787,10 @@ legend {
   }
 
   .date-adder {
+    grid-template-columns: 1fr;
+  }
+
+  .account-add-form {
     grid-template-columns: 1fr;
   }
 

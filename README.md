@@ -52,6 +52,12 @@ The session is saved in:
 
 Use **Logout session** in the UI to clear the linked session and force a fresh QR login.
 
+## Multiple WhatsApp Accounts
+
+Use the account selector to add separate sender accounts, such as your account and a friend's account. Each account has its own WhatsApp QR login, saved session, target chat, schedule settings, send history, and scheduler timer.
+
+Run only one Node/Forge daemon process. That single process manages all configured accounts.
+
 ## Main UI Controls
 
 - **WhatsApp group or chat**: searchable picker for the target group/chat.

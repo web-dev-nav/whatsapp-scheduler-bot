@@ -11,6 +11,16 @@
       <section class="login-screen" id="loginScreen">
         <div class="login-panel">
           <h1>WhatsApp Connection</h1>
+          <div class="account-card compact">
+            <label class="field">
+              <span>Account</span>
+              <select id="loginAccountSelect"></select>
+            </label>
+            <form class="account-add-form" id="loginAccountForm">
+              <input id="loginAccountName" type="text" autocomplete="off" placeholder="Add account name" />
+              <button class="secondary-button" type="submit">Add</button>
+            </form>
+          </div>
           <p id="loginStatus">Starting WhatsApp...</p>
           <img id="qrCode" class="qr-code" alt="WhatsApp login QR code" hidden />
         </div>
@@ -27,6 +37,16 @@
             <div>
               <h2>WhatsApp Connection</h2>
               <p id="whatsappStatus">Starting WhatsApp...</p>
+            </div>
+            <div class="account-card">
+              <label class="field">
+                <span>Sending account</span>
+                <select id="accountSelect"></select>
+              </label>
+              <form class="account-add-form" id="accountForm">
+                <input id="accountName" type="text" autocomplete="off" placeholder="Add friend, staff, or backup account" />
+                <button class="secondary-button" type="submit">Add account</button>
+              </form>
             </div>
             <button class="danger-button" id="logoutWhatsapp" type="button">Logout session</button>
           </section>

@@ -21,6 +21,12 @@ const loginStatus = document.querySelector('#loginStatus');
 const whatsappStatus = document.querySelector('#whatsappStatus');
 const qrCode = document.querySelector('#qrCode');
 const logoutWhatsapp = document.querySelector('#logoutWhatsapp');
+const accountSelect = document.querySelector('#accountSelect');
+const accountForm = document.querySelector('#accountForm');
+const accountName = document.querySelector('#accountName');
+const loginAccountSelect = document.querySelector('#loginAccountSelect');
+const loginAccountForm = document.querySelector('#loginAccountForm');
+const loginAccountName = document.querySelector('#loginAccountName');
 const chatCombo = document.querySelector('#chatCombo');
 const chatComboInput = document.querySelector('#chatComboInput');
 const chatComboMenu = document.querySelector('#chatComboMenu');
@@ -34,6 +40,8 @@ let whatsappPollTimer;
 let availableChats = [];
 let currentConfig;
 let autoSaveTimer;
+let accounts = [];
+let currentAccountId = localStorage.getItem('currentAccountId') || 'main';
 
 days.forEach((day) => {
   const label = document.createElement('label');
@@ -150,6 +158,86 @@ function setStatus(message, type = '') {
   saveStatus.className = type ? `status-message ${type}` : 'status-message';
 }
 
+function accountQuery() {
+  return `account=${encodeURIComponent(currentAccountId)}`;
+}
+
+function currentAccountName() {
+  return accounts.find((account) => account.id === currentAccountId)?.name || currentAccountId;
+}
+
+function renderAccountOptions() {
+  [accountSelect, loginAccountSelect].forEach((select) => {
+    select.innerHTML = '';
+
+    accounts.forEach((account) => {
+      const option = document.createElement('option');
+      option.value = account.id;
+      option.textContent = account.name;
+      select.append(option);
+    });
+
+    select.value = currentAccountId;
+  });
+}
+
+async function loadAccounts() {
+  const response = await fetch(`/api/accounts?t=${Date.now()}`, { cache: 'no-store' });
+  const payload = await response.json();
+
+  if (!response.ok) {
+    throw new Error(payload.error || 'Unable to load accounts.');
+  }
+
+  accounts = payload.accounts || [];
+
+  if (!accounts.some((account) => account.id === currentAccountId)) {
+    currentAccountId = accounts[0]?.id || 'main';
+  }
+
+  localStorage.setItem('currentAccountId', currentAccountId);
+  renderAccountOptions();
+}
+
+async function addAccount(name) {
+  const trimmed = name.trim();
+
+  if (!trimmed) {
+    return;
+  }
+
+  const response = await fetch('/api/accounts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: trimmed }),
+  });
+  const payload = await response.json();
+
+  if (!response.ok) {
+    throw new Error(payload.error || 'Unable to add account.');
+  }
+
+  accounts = payload.accounts || accounts;
+  currentAccountId = payload.account.id;
+  localStorage.setItem('currentAccountId', currentAccountId);
+  renderAccountOptions();
+  await loadSettings();
+}
+
+async function switchAccount(accountId) {
+  if (accountId === currentAccountId) {
+    return;
+  }
+
+  currentAccountId = accountId;
+  localStorage.setItem('currentAccountId', currentAccountId);
+  renderAccountOptions();
+  availableChats = [];
+  renderChatOptions([], form.groupName.value);
+  setStatus('Loading account...');
+  await loadSettings();
+}
+
 function formatHumanDate(dateKey) {
   const [year, month, day] = dateKey.split('-').map(Number);
   const date = new Date(year, month - 1, day);
@@ -260,7 +348,7 @@ function showLogin(payload) {
   appShell.hidden = true;
 
   if (payload.status === 'qr' && payload.qrDataUrl) {
-    loginStatus.textContent = 'Scan this QR code in WhatsApp to continue.';
+    loginStatus.textContent = `Scan this QR code for ${currentAccountName()}.`;
     qrCode.src = payload.qrDataUrl;
     qrCode.hidden = false;
     return;
@@ -281,6 +369,7 @@ function showApp(payload) {
   loginScreen.hidden = true;
   appShell.hidden = false;
   whatsappStatus.textContent = payload.error || 'Connected. Groups and chats are loaded.';
+  renderAccountOptions();
   availableChats = payload.chats || [];
   renderChatOptions(payload.chats || [], form.groupName.value);
 }
@@ -426,7 +515,7 @@ function renderSchedulerLogs(logs) {
 }
 
 async function loadSchedulerLogs() {
-  const response = await fetch(`/api/logs?t=${Date.now()}`, { cache: 'no-store' });
+  const response = await fetch(`/api/logs?${accountQuery()}&t=${Date.now()}`, { cache: 'no-store' });
   const payload = await response.json();
 
   if (!response.ok) {
@@ -569,7 +658,7 @@ function renderShiftGroups(title, items, collapsed) {
 }
 
 async function loadWhatsappState() {
-  const response = await fetch(`/api/whatsapp?t=${Date.now()}`, { cache: 'no-store' });
+  const response = await fetch(`/api/whatsapp?${accountQuery()}&t=${Date.now()}`, { cache: 'no-store' });
   const payload = await response.json();
 
   if (!response.ok) {
@@ -620,7 +709,7 @@ async function logoutWhatsappSession() {
   qrCode.removeAttribute('src');
   renderChatOptions([], form.groupName.value);
 
-  const response = await fetch('/api/whatsapp/logout', { method: 'POST' });
+  const response = await fetch(`/api/whatsapp/logout?${accountQuery()}`, { method: 'POST' });
   const payload = await response.json();
 
   if (!response.ok) {
@@ -635,7 +724,7 @@ async function logoutWhatsappSession() {
 }
 
 async function loadSettings() {
-  const response = await fetch('/api/config');
+  const response = await fetch(`/api/config?${accountQuery()}`);
   const payload = await response.json();
 
   if (!response.ok) {
@@ -644,7 +733,7 @@ async function loadSettings() {
 
   fillForm(payload.config);
   renderPreview(payload.preview);
-  setStatus('Settings loaded');
+  setStatus(`Settings loaded for ${currentAccountName()}`);
   await loadWhatsappState();
   await loadSchedulerLogs();
 }
@@ -656,7 +745,7 @@ async function saveSettings({ showConfirmation = false } = {}) {
   saveSettingsButton.textContent = 'Saving...';
 
   try {
-    const response = await fetch('/api/config', {
+    const response = await fetch(`/api/config?${accountQuery()}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ config: readForm() }),
@@ -808,6 +897,37 @@ logoutWhatsapp.addEventListener('click', () => {
   });
 });
 
+[accountSelect, loginAccountSelect].forEach((select) => {
+  select.addEventListener('change', () => {
+    switchAccount(select.value).catch((error) => {
+      setStatus(error.message, 'error');
+      loginStatus.textContent = error.message;
+    });
+  });
+});
+
+accountForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  addAccount(accountName.value)
+    .then(() => {
+      accountName.value = '';
+    })
+    .catch((error) => {
+      setStatus(error.message, 'error');
+    });
+});
+
+loginAccountForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  addAccount(loginAccountName.value)
+    .then(() => {
+      loginAccountName.value = '';
+    })
+    .catch((error) => {
+      loginStatus.textContent = error.message;
+    });
+});
+
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   saveSettings({ showConfirmation: true }).catch((error) => {
@@ -815,9 +935,12 @@ form.addEventListener('submit', async (event) => {
   });
 });
 
-loadSettings().catch((error) => {
-  setStatus(error.message);
-});
+loadAccounts()
+  .then(() => loadSettings())
+  .catch((error) => {
+    setStatus(error.message, 'error');
+    loginStatus.textContent = error.message;
+  });
 
 scheduleWhatsappPoll();
 setInterval(() => {
