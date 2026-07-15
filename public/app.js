@@ -280,7 +280,7 @@ function showLogin(payload) {
 function showApp(payload) {
   loginScreen.hidden = true;
   appShell.hidden = false;
-  whatsappStatus.textContent = 'Connected. Groups and chats are loaded.';
+  whatsappStatus.textContent = payload.error || 'Connected. Groups and chats are loaded.';
   availableChats = payload.chats || [];
   renderChatOptions(payload.chats || [], form.groupName.value);
 }

@@ -22,6 +22,9 @@ let whatsappClient;
 let whatsappStarting = false;
 let schedulerTimer;
 let whatsappReadyAt = null;
+let lastChatRefreshErrorAt = 0;
+let whatsappRestartTimer;
+let whatsappRestartAttempts = 0;
 const schedulerLogs = [];
 
 function addSchedulerLog(type, message, details = {}) {
@@ -60,18 +63,30 @@ function chatDisplayName(chat) {
 async function refreshChats() {
   if (!whatsappClient) return;
 
-  const chats = await whatsappClient.getChats();
-  whatsappState.chats = chats
-    .map((chat) => ({
-      id: chat.id._serialized,
-      name: chatDisplayName(chat),
-      isGroup: Boolean(chat.isGroup),
-    }))
-    .filter((chat) => chat.name)
-    .sort((a, b) => {
-      if (a.isGroup !== b.isGroup) return a.isGroup ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    });
+  try {
+    const chats = await whatsappClient.getChats();
+    whatsappState.chats = chats
+      .map((chat) => ({
+        id: chat.id._serialized,
+        name: chatDisplayName(chat),
+        isGroup: Boolean(chat.isGroup),
+      }))
+      .filter((chat) => chat.name)
+      .sort((a, b) => {
+        if (a.isGroup !== b.isGroup) return a.isGroup ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+    whatsappState.error = null;
+    lastChatRefreshErrorAt = 0;
+  } catch (error) {
+    whatsappState.error = `Could not load WhatsApp chats: ${error.message}`;
+
+    const now = Date.now();
+    if (now - lastChatRefreshErrorAt > 60 * 1000) {
+      addSchedulerLog('error', 'Could not load WhatsApp chats.', { error: error.message });
+      lastChatRefreshErrorAt = now;
+    }
+  }
 }
 
 function clearScheduler() {
@@ -79,6 +94,13 @@ function clearScheduler() {
     clearTimeout(schedulerTimer);
     schedulerTimer = null;
     addSchedulerLog('info', 'Scheduler timer cleared.');
+  }
+}
+
+function clearWhatsappRestart() {
+  if (whatsappRestartTimer) {
+    clearTimeout(whatsappRestartTimer);
+    whatsappRestartTimer = null;
   }
 }
 
@@ -309,6 +331,7 @@ function attachWhatsappHandlers(client) {
 
   client.on('authenticated', () => {
     whatsappState.status = 'authenticated';
+    whatsappState.qrDataUrl = null;
     whatsappState.error = null;
   });
 
@@ -317,6 +340,8 @@ function attachWhatsappHandlers(client) {
     whatsappReadyAt = new Date();
     whatsappState.qrDataUrl = null;
     whatsappState.error = null;
+    whatsappRestartAttempts = 0;
+    clearWhatsappRestart();
     await refreshChats();
     const config = loadConfig();
     addSchedulerLog(
@@ -333,6 +358,44 @@ function attachWhatsappHandlers(client) {
     addSchedulerLog('error', 'WhatsApp disconnected.', { reason });
     clearScheduler();
   });
+
+  client.on('auth_failure', (message) => {
+    whatsappState.status = 'error';
+    whatsappState.error = message;
+    addSchedulerLog('error', 'WhatsApp authentication failed.', { error: message });
+  });
+}
+
+function scheduleWhatsappRestart(error) {
+  const transientPuppeteerError = /Execution context was destroyed|Runtime\.callFunctionOn|Protocol error/i.test(
+    error.message
+  );
+
+  if (!transientPuppeteerError || whatsappRestartAttempts >= 3 || whatsappRestartTimer) {
+    return;
+  }
+
+  whatsappRestartAttempts += 1;
+  addSchedulerLog('error', `WhatsApp startup failed. Retrying (${whatsappRestartAttempts}/3).`, {
+    error: error.message,
+  });
+
+  whatsappRestartTimer = setTimeout(async () => {
+    whatsappRestartTimer = null;
+
+    if (whatsappClient) {
+      try {
+        await whatsappClient.destroy();
+      } catch (destroyError) {
+        addSchedulerLog('error', 'Could not destroy failed WhatsApp browser before retry.', {
+          error: destroyError.message,
+        });
+      }
+    }
+
+    whatsappClient = null;
+    startWhatsappClient();
+  }, 5000);
 }
 
 function startWhatsappClient() {
@@ -347,6 +410,7 @@ function startWhatsappClient() {
     .catch((error) => {
       whatsappState.status = 'error';
       whatsappState.error = error.message;
+      scheduleWhatsappRestart(error);
     })
     .finally(() => {
       whatsappStarting = false;
@@ -356,6 +420,8 @@ function startWhatsappClient() {
 async function logoutWhatsappClient() {
   resetWhatsappState('logging_out');
   clearScheduler();
+  clearWhatsappRestart();
+  whatsappRestartAttempts = 0;
 
   if (whatsappClient) {
     try {
