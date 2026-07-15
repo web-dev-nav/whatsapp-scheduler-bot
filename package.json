@@ -1,13 +1,18 @@
 {
-  "name": "github",
+  "name": "whatsapp-scheduler-bot",
   "version": "1.0.0",
-  "description": "",
-  "main": "bot.js",
+  "description": "Local WhatsApp patrol scheduler with browser UI and guarded sender.",
+  "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "start:prod": "NODE_ENV=production node server.js",
     "test:bot": "node bot.js --test",
     "list:schedule": "node bot.js --list",
+    "check": "node --check server.js && node --check scheduler.js && node --check bot.js && node --check public/app.js",
     "ui": "node server.js"
+  },
+  "engines": {
+    "node": ">=18 <27"
   },
   "keywords": [],
   "author": "",

@@ -4,12 +4,18 @@ const fs = require('fs');
 const path = require('path');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const QRCode = require('qrcode');
+const { loadEnvFile } = require('./env');
+
+loadEnvFile();
+
 const { buildScheduleForWeeks, findNextSendAt, formatDate, loadConfig, saveConfig } = require('./scheduler');
 
-const HOST = '127.0.0.1';
+const HOST = process.env.HOST || '127.0.0.1';
 const PORT = Number(process.env.PORT || 3000);
+const DATA_DIR = path.resolve(process.env.DATA_DIR || __dirname);
 const PUBLIC_DIR = path.join(__dirname, 'public');
-const SEND_HISTORY_PATH = path.join(__dirname, 'send-history.json');
+const SEND_HISTORY_PATH = path.resolve(process.env.SEND_HISTORY_PATH || path.join(DATA_DIR, 'send-history.json'));
+const WHATSAPP_AUTH_DIR = path.resolve(process.env.WHATSAPP_AUTH_DIR || path.join(DATA_DIR, '.wwebjs_auth'));
 const MS_PER_MINUTE = 60 * 1000;
 const MS_PER_DAY = 24 * 60 * MS_PER_MINUTE;
 const whatsappState = {
@@ -25,7 +31,12 @@ let whatsappReadyAt = null;
 let lastChatRefreshErrorAt = 0;
 let whatsappRestartTimer;
 let whatsappRestartAttempts = 0;
+let shuttingDown = false;
 const schedulerLogs = [];
+
+fs.mkdirSync(DATA_DIR, { recursive: true });
+fs.mkdirSync(path.dirname(SEND_HISTORY_PATH), { recursive: true });
+fs.mkdirSync(WHATSAPP_AUTH_DIR, { recursive: true });
 
 function addSchedulerLog(type, message, details = {}) {
   const config = loadConfig();
@@ -313,12 +324,23 @@ function scheduleNextPatrolMessage() {
 }
 
 function createWhatsappClient() {
+  const puppeteerOptions = {
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+    ],
+  };
+
+  if (process.env.CHROME_EXECUTABLE_PATH) {
+    puppeteerOptions.executablePath = process.env.CHROME_EXECUTABLE_PATH;
+  }
+
   return new Client({
-    authStrategy: new LocalAuth(),
-    puppeteer: {
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    },
+    authStrategy: new LocalAuth({ dataPath: WHATSAPP_AUTH_DIR }),
+    puppeteer: puppeteerOptions,
   });
 }
 
@@ -563,6 +585,42 @@ const server = http.createServer(async (request, response) => {
   }
 });
 
+server.on('error', (error) => {
+  console.error(`Could not start server on ${HOST}:${PORT}.`, error);
+  process.exit(1);
+});
+
 server.listen(PORT, HOST, () => {
   console.log(`Schedule UI running at http://${HOST}:${PORT}`);
+});
+
+async function shutdown(signal) {
+  if (shuttingDown) {
+    return;
+  }
+
+  shuttingDown = true;
+  console.log(`Received ${signal}. Shutting down...`);
+  clearScheduler();
+  clearWhatsappRestart();
+
+  if (whatsappClient) {
+    try {
+      await whatsappClient.destroy();
+    } catch (error) {
+      console.error('Could not destroy WhatsApp client during shutdown.', error.message);
+    }
+  }
+
+  server.close(() => {
+    process.exit(0);
+  });
+}
+
+process.on('SIGINT', () => {
+  shutdown('SIGINT');
+});
+
+process.on('SIGTERM', () => {
+  shutdown('SIGTERM');
 });

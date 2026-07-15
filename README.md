@@ -26,6 +26,12 @@ http://127.0.0.1:3000
 
 `npm run ui` starts the browser UI, WhatsApp connection, and scheduled sender in one process.
 
+## Deploy To Laravel Forge
+
+This app deploys to Forge as a Node.js service behind Nginx, with Forge running `npm start` as a daemon.
+
+See [DEPLOY.md](DEPLOY.md) for the AWS / Laravel Forge deployment steps, daemon command, Nginx proxy block, and persistent data directory setup.
+
 ## First Login
 
 If WhatsApp is not linked yet, the UI shows a centered QR code.

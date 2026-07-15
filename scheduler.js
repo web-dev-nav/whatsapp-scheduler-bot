@@ -1,7 +1,12 @@
 const fs = require('fs');
 const path = require('path');
+const { loadEnvFile } = require('./env');
 
-const CONFIG_PATH = path.join(__dirname, 'config.json');
+loadEnvFile();
+
+const DATA_DIR = path.resolve(process.env.DATA_DIR || __dirname);
+const CONFIG_PATH = path.resolve(process.env.CONFIG_PATH || path.join(DATA_DIR, 'config.json'));
+const REPO_CONFIG_PATH = path.join(__dirname, 'config.json');
 const TIMEZONE = 'America/Toronto';
 const MS_PER_MINUTE = 60 * 1000;
 const MS_PER_DAY = 24 * 60 * MS_PER_MINUTE;
@@ -46,6 +51,8 @@ function mergeConfig(config) {
 }
 
 function loadConfig() {
+  ensureConfigPath();
+
   if (!fs.existsSync(CONFIG_PATH)) {
     return normalizeConfig(DEFAULT_CONFIG);
   }
@@ -55,9 +62,19 @@ function loadConfig() {
 }
 
 function saveConfig(config) {
+  ensureConfigPath();
+
   const normalized = normalizeConfig(config);
   fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(normalized, null, 2)}\n`);
   return normalized;
+}
+
+function ensureConfigPath() {
+  fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
+
+  if (CONFIG_PATH !== REPO_CONFIG_PATH && !fs.existsSync(CONFIG_PATH) && fs.existsSync(REPO_CONFIG_PATH)) {
+    fs.copyFileSync(REPO_CONFIG_PATH, CONFIG_PATH);
+  }
 }
 
 function normalizeConfig(config) {
