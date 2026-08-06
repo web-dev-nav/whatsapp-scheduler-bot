@@ -3,7 +3,7 @@
   "timezone": "America/Toronto",
   "message": "Patrol completed and verified all four checkpoints — East, West, South, and North. Ensured Main Entrances and truck entrance and bowery rd entrance were open as required, and Wright Street entrances were closed and confirmed secure. Conducted a thorough inspection of all areas with no unusual activity detected.",
   "schedule": {
-    "enabled": true,
+    "enabled": false,
     "activeShiftDays": [
       1,
       2,
@@ -25,5 +25,16 @@
     "maxSendsPerDay": 12,
     "reconnectCooldownMinutes": 15,
     "staleSendGraceMinutes": 5
+  },
+  "patrol": {
+    "checkpoints": [
+      {
+        "id": "cp-3",
+        "name": "Main entrance gate",
+        "lat": 43.15487,
+        "lng": -80.328373,
+        "radiusMeters": 60
+      }
+    ]
   }
 }

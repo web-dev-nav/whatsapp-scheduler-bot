@@ -35,6 +35,7 @@ In the Forge site root, create `.env`:
 HOST=127.0.0.1
 PORT=3000
 DATA_DIR=/home/forge/.whatsapp-scheduler-bot
+PATROL_TOKEN=change-this-token
 ```
 
 Runtime files stored there:
@@ -111,3 +112,28 @@ The app supports multiple WhatsApp sender accounts in one Forge daemon:
 Each account has its own WhatsApp session, schedule config, send history, chat list, and scheduler timer. Keep the Forge daemon process count at `1`; the one Node process manages all accounts.
 
 Keep the daemon running. Scheduled messages only send while the AWS instance and daemon are online.
+
+## 8. GPS Patrol Mode
+
+After SSL is enabled, open:
+
+```text
+https://YOUR-DOMAIN.com/patrol.html
+```
+
+The patrol page uses browser GPS, so it must be opened over HTTPS on iPhone. Enter the same `PATROL_TOKEN` value from the Forge `.env` file into the patrol page token field before using **Test connection** or **Start live patrol**.
+
+Native iPhone Shortcuts can call the same webhook:
+
+```text
+POST https://YOUR-DOMAIN.com/api/patrol/trigger?account=main&token=change-this-token
+```
+
+Use JSON like:
+
+```json
+{
+  "source": "ios-shortcuts",
+  "checkpointName": "North checkpoint"
+}
+```

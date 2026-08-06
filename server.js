@@ -30,6 +30,9 @@ const LEGACY_WHATSAPP_AUTH_DIR = path.resolve(
 );
 const MS_PER_MINUTE = 60 * 1000;
 const MS_PER_DAY = 24 * 60 * MS_PER_MINUTE;
+// Optional shared secret for the GPS/location trigger webhook. When set, callers
+// must pass it as ?token= or an X-Patrol-Token header. Leave unset for local use.
+const PATROL_TOKEN = process.env.PATROL_TOKEN || '';
 const runtimes = new Map();
 let shuttingDown = false;
 
@@ -465,6 +468,84 @@ async function sendPatrolMessage(runtime, scheduledAt) {
   }
 }
 
+// On-demand send used by the GPS/location trigger (patrol mode). Unlike the
+// scheduled path, this ignores the fixed timetable (there is no scheduledAt and
+// no shift window) but keeps the anti-spam guards that matter: min gap between
+// sends and the daily cap. This prevents re-entering a geofence from spamming
+// the group while still letting a real patrol fire a message immediately.
+async function sendPatrolMessageNow(runtime, { source = 'patrol-gps', checkpointName = null, dryRun = false } = {}) {
+  const config = loadConfigFromPath(runtime.paths.configPath);
+
+  if (runtime.state.status !== 'ready') {
+    return { ok: false, reason: 'WhatsApp is not connected yet.' };
+  }
+
+  if (!config.message.trim()) {
+    return { ok: false, reason: 'Message is empty.' };
+  }
+
+  const chat = await findTargetChat(runtime, config.groupName);
+
+  if (!chat) {
+    return { ok: false, reason: `Could not find chat "${config.groupName}".` };
+  }
+
+  const history = readSendHistory(runtime);
+
+  if (!history) {
+    return { ok: false, reason: 'Send history is unreadable; sends are blocked.' };
+  }
+
+  const now = new Date();
+  const lastSuccessfulSend = findLastSuccessfulSend(history);
+
+  if (lastSuccessfulSend) {
+    const minutesSinceLastSend =
+      (now.getTime() - new Date(lastSuccessfulSend.attemptedAt).getTime()) / MS_PER_MINUTE;
+
+    if (minutesSinceLastSend < config.schedule.minMinutesBetweenSends) {
+      return {
+        ok: false,
+        reason: `Last send was ${Math.round(minutesSinceLastSend)} min ago (minimum ${config.schedule.minMinutesBetweenSends} min).`,
+      };
+    }
+  }
+
+  if (countRecentSuccessfulSends(history, now) >= config.schedule.maxSendsPerDay) {
+    return { ok: false, reason: `Daily send cap of ${config.schedule.maxSendsPerDay} messages has been reached.` };
+  }
+
+  if (dryRun) {
+    return {
+      ok: true,
+      dryRun: true,
+      chatName: chat.name,
+      reason: 'All guards passed. No message was sent (dry run).',
+    };
+  }
+
+  addSchedulerLog(
+    runtime,
+    'info',
+    `Location trigger: sending patrol message to "${chat.name}"${checkpointName ? ` (${checkpointName})` : ''}.`
+  );
+
+  try {
+    const sentMessage = await chat.sendMessage(config.message);
+    const messageId = sentMessage?.id?._serialized || sentMessage?.id?.id || null;
+    appendSendHistory(runtime, buildHistoryEntry('sent', now, config, chat, { messageId, source, checkpointName }));
+    addSchedulerLog(runtime, 'success', `Patrol message sent to "${chat.name}" via ${source}.`, {
+      chatName: chat.name,
+      messageId,
+    });
+    return { ok: true, chatName: chat.name, messageId };
+  } catch (error) {
+    appendSendHistory(runtime, buildHistoryEntry('failed', now, config, chat, { error: error.message, source }));
+    addSchedulerLog(runtime, 'error', 'Failed to send location-triggered patrol message.', { error: error.message });
+    return { ok: false, reason: error.message };
+  }
+}
+
 function scheduleNextPatrolMessage(runtime) {
   clearScheduler(runtime);
 
@@ -795,6 +876,34 @@ const server = http.createServer(async (request, response) => {
       const config = saveConfigToPath(runtime.paths.configPath, payload.config);
       scheduleNextPatrolMessage(runtime);
       sendJson(response, 200, { account: runtime.account, config, preview: buildPreview(config) });
+      return;
+    }
+
+    // GPS/location trigger webhook. Called by the in-app Patrol Mode page when the
+    // phone enters a checkpoint, or by a native phone geofence (iOS Shortcuts /
+    // Android Tasker). Sends the patrol message on demand, guarded against spam.
+    if (request.method === 'POST' && pathname === '/api/patrol/trigger') {
+      if (PATROL_TOKEN) {
+        const provided = url.searchParams.get('token') || request.headers['x-patrol-token'] || '';
+        if (provided !== PATROL_TOKEN) {
+          sendJson(response, 401, { ok: false, error: 'Invalid or missing patrol token.' });
+          return;
+        }
+      }
+
+      const runtime = requireRuntime(response, accountFromUrl(url));
+      if (!runtime) return;
+
+      const body = await readRequestBody(request);
+      const payload = body ? JSON.parse(body) : {};
+      const dryRun = url.searchParams.get('dryRun') === '1' || payload.dryRun === true;
+      const result = await sendPatrolMessageNow(runtime, {
+        source: payload.source || 'patrol-gps',
+        checkpointName: payload.checkpointName || null,
+        dryRun,
+      });
+
+      sendJson(response, result.ok ? 200 : 409, { account: runtime.account, ...result });
       return;
     }
 

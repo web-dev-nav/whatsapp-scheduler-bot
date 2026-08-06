@@ -111,6 +111,70 @@ npm run list:schedule
 
 This does not send messages.
 
+## GPS Patrol Mode
+
+Open:
+
+```text
+http://127.0.0.1:3000/patrol.html
+```
+
+Patrol Mode lets you save checkpoint pins on a map. While live patrol is running on your phone, the browser watches GPS; when the phone enters a checkpoint circle, it calls:
+
+```text
+POST /api/patrol/trigger?account=main
+```
+
+The server sends the same saved WhatsApp message to the configured group. The webhook keeps the normal anti-spam guards: minimum time between sends and daily send cap.
+
+Important iPhone/local-Mac behavior:
+
+- GPS works on `127.0.0.1`, but your iPhone cannot reach your Mac's `127.0.0.1`.
+- iPhone Safari requires HTTPS for GPS on non-localhost pages.
+- For real patrol use from a local Mac, run an HTTPS tunnel to port `3000`, then open the tunnel URL on the iPhone.
+- Keep the Patrol Mode page open and the phone awake during the patrol. Browser GPS can pause when the screen locks.
+
+Set a webhook token before exposing the app through a tunnel:
+
+```bash
+PATROL_TOKEN=change-this-token npm run ui
+```
+
+Then enter the same token in **Patrol webhook token** on `/patrol.html`. The token is saved only in that browser's local storage.
+
+For a tunnel, use any HTTPS tunnel that forwards to `http://127.0.0.1:3000`, such as Cloudflare Tunnel or ngrok. The public URL will look like:
+
+```text
+https://your-tunnel.example/patrol.html
+```
+
+### iPhone Shortcuts Geofence
+
+The in-app map is easiest when you can keep the page open. For background triggering on iPhone, use Shortcuts:
+
+1. Start the app with `PATROL_TOKEN` set.
+2. Make the Mac app reachable from the iPhone with an HTTPS tunnel or hosted domain.
+3. Open iPhone **Shortcuts > Automation > New Automation > Arrive**.
+4. Pick the patrol checkpoint location and choose **Run Immediately** if iOS offers it.
+5. Add **Get Contents of URL**.
+6. Set Method to `POST`.
+7. Use this URL, changing the host/token/account:
+
+```text
+https://your-tunnel.example/api/patrol/trigger?account=main&token=change-this-token
+```
+
+8. Set the request body to JSON:
+
+```json
+{
+  "source": "ios-shortcuts",
+  "checkpointName": "North checkpoint"
+}
+```
+
+Create one automation per checkpoint if you want different checkpoint names.
+
 ## Scheduler Log
 
 The UI includes a **Scheduler Log** panel that shows:

@@ -33,6 +33,12 @@ const DEFAULT_CONFIG = {
     reconnectCooldownMinutes: 15,
     staleSendGraceMinutes: 5,
   },
+  // GPS "patrol mode": checkpoints the guard physically drives to. When the
+  // phone enters a checkpoint radius, the same message is sent on demand
+  // (see /api/patrol/trigger in server.js) instead of on a fixed timer.
+  patrol: {
+    checkpoints: [],
+  },
 };
 
 function deepClone(value) {
@@ -47,7 +53,41 @@ function mergeConfig(config) {
       ...deepClone(DEFAULT_CONFIG.schedule),
       ...(config.schedule || {}),
     },
+    patrol: {
+      ...deepClone(DEFAULT_CONFIG.patrol),
+      ...(config.patrol || {}),
+    },
   };
+}
+
+function normalizeCheckpoint(checkpoint, index) {
+  if (!checkpoint || typeof checkpoint !== 'object') {
+    return null;
+  }
+
+  const lat = Number(checkpoint.lat);
+  const lng = Number(checkpoint.lng);
+
+  if (!Number.isFinite(lat) || lat < -90 || lat > 90) {
+    return null;
+  }
+
+  if (!Number.isFinite(lng) || lng < -180 || lng > 180) {
+    return null;
+  }
+
+  let radiusMeters = Number(checkpoint.radiusMeters);
+  if (!Number.isFinite(radiusMeters)) {
+    radiusMeters = 60;
+  }
+  radiusMeters = clampNumber(radiusMeters, 10, 2000);
+
+  const fallbackName = `Checkpoint ${index + 1}`;
+  const name = String(checkpoint.name || fallbackName).trim().slice(0, 60) || fallbackName;
+  const fallbackId = `cp-${index + 1}`;
+  const id = String(checkpoint.id || fallbackId).trim().slice(0, 40) || fallbackId;
+
+  return { id, name, lat, lng, radiusMeters };
 }
 
 function loadConfig() {
@@ -146,6 +186,15 @@ function normalizeConfig(config) {
   schedule.maxSendsPerDay = clampNumber(schedule.maxSendsPerDay, 1, 12);
   schedule.reconnectCooldownMinutes = clampNumber(schedule.reconnectCooldownMinutes, 10, 60);
   schedule.staleSendGraceMinutes = clampNumber(schedule.staleSendGraceMinutes, 1, 30);
+
+  const patrolCheckpoints = Array.isArray(merged.patrol && merged.patrol.checkpoints)
+    ? merged.patrol.checkpoints
+    : [];
+  merged.patrol = {
+    checkpoints: patrolCheckpoints
+      .map((checkpoint, index) => normalizeCheckpoint(checkpoint, index))
+      .filter(Boolean),
+  };
 
   return merged;
 }
