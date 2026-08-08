@@ -10,8 +10,7 @@
       3
     ],
     "extraShiftDates": [
-      "2026-07-09",
-      "2026-07-23"
+      "2026-08-06"
     ],
     "shiftStartHour": 20,
     "shiftEndHour": 8,
@@ -27,14 +26,6 @@
     "staleSendGraceMinutes": 5
   },
   "patrol": {
-    "checkpoints": [
-      {
-        "id": "cp-3",
-        "name": "Main entrance gate",
-        "lat": 43.15487,
-        "lng": -80.328373,
-        "radiusMeters": 60
-      }
-    ]
+    "checkpoints": []
   }
 }

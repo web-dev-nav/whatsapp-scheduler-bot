@@ -1,0 +1,63 @@
+{
+  "name": "Patrol Test - iPhone Shortcut Webhook",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "patrol-test",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "f0af7b3a-6f4d-4b2c-8c96-6f1f116b2f28",
+      "name": "Patrol Test Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        420,
+        300
+      ],
+      "webhookId": "7a4c83f0-b2a2-4a6d-a93d-f2f9f9ef7c4c"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"ok\": true,\n  \"message\": \"Patrol test received by n8n\",\n  \"receivedAt\": \"{{ $now.toISO() }}\",\n  \"guard\": \"{{ $json.body.guard || 'unknown' }}\",\n  \"checkpointName\": \"{{ $json.body.checkpointName || 'unknown' }}\",\n  \"source\": \"{{ $json.body.source || 'unknown' }}\",\n  \"body\": {{ JSON.stringify($json.body) }}\n}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "4ab73d8e-1a74-47e6-8f2d-58309e86a74e",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        700,
+        300
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Patrol Test Webhook": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "d1d384e7-4380-44d1-b7c3-06d8435609dd",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "id": "patrol-test-iphone-shortcut-webhook",
+  "tags": []
+}

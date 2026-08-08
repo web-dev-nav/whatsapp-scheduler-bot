@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>WhatsApp Patrol Automation Plan</title>
+    <style>
+      @page {
+        margin: 0.65in;
+      }
+      body {
+        color: #17211d;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+        font-size: 13px;
+        line-height: 1.48;
+      }
+      h1 {
+        margin: 0 0 6px;
+        color: #0c6157;
+        font-size: 25px;
+      }
+      h2 {
+        margin: 22px 0 8px;
+        color: #128c7e;
+        font-size: 17px;
+        border-bottom: 1px solid #d9e5e1;
+        padding-bottom: 4px;
+      }
+      h3 {
+        margin: 16px 0 6px;
+        font-size: 14px;
+      }
+      p {
+        margin: 6px 0;
+      }
+      ul,
+      ol {
+        margin: 6px 0 10px 22px;
+        padding: 0;
+      }
+      li {
+        margin: 3px 0;
+      }
+      code,
+      pre {
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      }
+      pre {
+        background: #f4f7f6;
+        border: 1px solid #dbe5e2;
+        border-radius: 6px;
+        margin: 8px 0 12px;
+        padding: 10px;
+        white-space: pre-wrap;
+      }
+      .meta {
+        color: #6b7671;
+        margin-bottom: 18px;
+      }
+      .box {
+        background: #f4fbf9;
+        border: 1px solid #cfe7df;
+        border-radius: 8px;
+        margin: 10px 0 14px;
+        padding: 12px;
+      }
+      .warn {
+        background: #fff8ec;
+        border-color: #efd29c;
+      }
+      .good {
+        background: #f0fbf4;
+        border-color: #ccebd6;
+      }
+      .flow {
+        font-size: 14px;
+        font-weight: 650;
+        text-align: center;
+      }
+      table {
+        border-collapse: collapse;
+        margin: 8px 0 12px;
+        width: 100%;
+      }
+      th,
+      td {
+        border: 1px solid #d9e5e1;
+        padding: 7px;
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        background: #eef7f4;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>WhatsApp Patrol Automation Plan</h1>
+    <p class="meta">Prepared for Navjot Singh on August 6, 2026</p>
+
+    <div class="box good">
+      <p><strong>Main goal:</strong> start a shift, drive patrol rounds, keep the iPhone screen off, and have the patrol completion/checkpoint message sent automatically to the WhatsApp group.</p>
+    </div>
+
+    <h2>1. Recommended Practical Setup</h2>
+    <p>The best setup is to keep each tool responsible for one clear job:</p>
+    <table>
+      <thead>
+        <tr>
+          <th>Part</th>
+          <th>Job</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>iPhone Shortcuts</td>
+          <td>Detect arrival at a patrol location in the background.</td>
+        </tr>
+        <tr>
+          <td>n8n Community Edition</td>
+          <td>Receive the iPhone trigger, log it, optionally filter duplicates, and call the WhatsApp scheduler app.</td>
+        </tr>
+        <tr>
+          <td>WhatsApp Scheduler App</td>
+          <td>Keep the WhatsApp Web session connected and send the message to the configured WhatsApp group.</td>
+        </tr>
+        <tr>
+          <td>Tailscale Funnel</td>
+          <td>Expose the n8n webhook over HTTPS so the iPhone can call it from anywhere.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="flow">
+      iPhone location automation -> Tailscale Funnel -> n8n webhook -> local scheduler app -> WhatsApp group
+    </div>
+
+    <h2>2. What Is Already Tested</h2>
+    <p>The n8n public webhook is working through Tailscale Funnel.</p>
+    <pre>https://hp-server.tailed5092.ts.net/webhook/patrol-test</pre>
+    <p>The successful production test received this body from iPhone Shortcuts:</p>
+    <pre>{
+  "guard": "Navjot",
+  "checkpointName": "Test checkpoint",
+  "source": "iphone-shortcuts"
+}</pre>
+    <p>This confirms:</p>
+    <pre>iPhone Shortcut -> Tailscale Funnel -> n8n production webhook</pre>
+
+    <h2>3. Why Browser Patrol Mode Is Not Enough</h2>
+    <p>The browser patrol page in this repo is useful for setup and testing:</p>
+    <ul>
+      <li>It shows a map.</li>
+      <li>It lets you add checkpoints.</li>
+      <li>It lets you set checkpoint radius.</li>
+      <li>It can trigger messages while the page is open.</li>
+    </ul>
+    <div class="box warn">
+      <p><strong>Limitation:</strong> browser GPS is not reliable when the iPhone screen is off. iOS can pause Safari JavaScript and location tracking in the background.</p>
+    </div>
+    <p>For screen-off patrol automation, iPhone Shortcuts location automation is the better first option.</p>
+
+    <h2>4. iPhone Shortcuts Limitation</h2>
+    <p>iPhone Shortcuts can run background arrival automations, but Apple does not always let you choose an exact radius. The location trigger is approximate.</p>
+    <p>Practical expectations:</p>
+    <ul>
+      <li>Use real checkpoint areas, gates, corners, or landmarks.</li>
+      <li>Expect a rough trigger zone, often around 100 meters or more.</li>
+      <li>Drive away and re-enter the area when testing.</li>
+      <li>Turn off Low Power Mode for best reliability.</li>
+      <li>Use "Run Immediately" where iOS offers it.</li>
+    </ul>
+
+    <h2>5. Current n8n Test Workflow</h2>
+    <p>The test workflow receives a POST request at:</p>
+    <pre>POST /webhook/patrol-test</pre>
+    <p>Expected JSON from iPhone:</p>
+    <pre>{
+  "source": "iphone-shortcuts",
+  "guard": "Navjot",
+  "checkpointName": "North checkpoint"
+}</pre>
+    <p>Expected n8n response:</p>
+    <pre>{
+  "ok": true,
+  "message": "Patrol test received by n8n",
+  "guard": "Navjot",
+  "checkpointName": "North checkpoint",
+  "source": "iphone-shortcuts"
+}</pre>
+
+    <h2>6. iPhone Shortcut Setup</h2>
+    <ol>
+      <li>Open the Shortcuts app on iPhone.</li>
+      <li>Create a new shortcut.</li>
+      <li>Add action: Get Contents of URL.</li>
+      <li>URL: <code>https://hp-server.tailed5092.ts.net/webhook/patrol-test</code></li>
+      <li>Method: POST.</li>
+      <li>Request Body: JSON.</li>
+      <li>Add fields: source, guard, checkpointName.</li>
+      <li>Run manually first and confirm it appears in n8n Executions.</li>
+    </ol>
+
+    <h2>7. iPhone Location Automation Setup</h2>
+    <ol>
+      <li>Open Shortcuts.</li>
+      <li>Tap Automation.</li>
+      <li>Create a new automation.</li>
+      <li>Select Arrive.</li>
+      <li>Pick the checkpoint location.</li>
+      <li>Choose Run Immediately if available.</li>
+      <li>Add Get Contents of URL.</li>
+      <li>Use the same n8n production webhook URL.</li>
+      <li>Send JSON with the checkpoint name for that location.</li>
+      <li>Create one automation per checkpoint.</li>
+    </ol>
+
+    <h2>8. Next n8n Workflow: Connect To WhatsApp Scheduler</h2>
+    <p>Once the scheduler app runs on the same home server as n8n, add an HTTP Request node after the Webhook node.</p>
+    <pre>Webhook -> HTTP Request -> Respond to Webhook</pre>
+    <p>HTTP Request node settings:</p>
+    <pre>Method: POST
+URL: http://127.0.0.1:3000/api/patrol/trigger?account=main</pre>
+    <p>If a patrol token is enabled:</p>
+    <pre>URL: http://127.0.0.1:3000/api/patrol/trigger?account=main&token=YOUR_TOKEN</pre>
+    <p>JSON body:</p>
+    <pre>{
+  "source": "n8n-iphone-shortcuts",
+  "checkpointName": "{{ $json.body.checkpointName }}"
+}</pre>
+
+    <h2>9. Home Server Requirements</h2>
+    <ul>
+      <li>n8n running and reachable through Tailscale Funnel.</li>
+      <li>WhatsApp Scheduler app running locally on the home server at port 3000.</li>
+      <li>Home server stays awake 24/7.</li>
+      <li>WhatsApp session is linked and ready.</li>
+      <li>The target WhatsApp group is selected in the scheduler app.</li>
+    </ul>
+
+    <h2>10. Security Plan</h2>
+    <p>Before using this with teammates, add access control:</p>
+    <ul>
+      <li>Admin password for the scheduler UI.</li>
+      <li>Per-guard account tokens.</li>
+      <li>Per-guard webhook URLs or guard IDs.</li>
+      <li>n8n duplicate protection to stop repeated messages.</li>
+      <li>Keep the scheduler app private if possible; expose n8n only.</li>
+    </ul>
+
+    <h2>11. Team/Guard Plan</h2>
+    <p>The scheduler app can support multiple WhatsApp accounts. Each guard can have:</p>
+    <ul>
+      <li>Separate WhatsApp QR session.</li>
+      <li>Separate target group/chat.</li>
+      <li>Separate message.</li>
+      <li>Separate checkpoint names.</li>
+      <li>Separate webhook token.</li>
+    </ul>
+    <p>Recommended guard payload from iPhone to n8n:</p>
+    <pre>{
+  "source": "iphone-shortcuts",
+  "guard": "navjot",
+  "checkpointName": "North checkpoint",
+  "token": "guard-secret"
+}</pre>
+
+    <h2>12. Immediate Next Steps</h2>
+    <ol>
+      <li>Finish fixing checkpoint save and account removal in the scheduler app.</li>
+      <li>Run the scheduler app on the home server.</li>
+      <li>Open the scheduler UI and link WhatsApp.</li>
+      <li>Confirm local dry run works: <code>/api/patrol/trigger?account=main&amp;dryRun=1</code>.</li>
+      <li>Add HTTP Request node in n8n to call the local scheduler app.</li>
+      <li>Test one iPhone Shortcut manually.</li>
+      <li>Test one iPhone Arrive automation in the field.</li>
+      <li>Add duplicate protection after the first real test succeeds.</li>
+    </ol>
+
+    <h2>13. Final Workflow Target</h2>
+    <pre>Start shift
+Drive patrol route
+iPhone detects arrival near checkpoint
+iPhone Shortcut calls n8n
+n8n logs and validates the request
+n8n calls local scheduler app
+Scheduler app sends WhatsApp message
+Activity is visible in n8n executions and scheduler logs</pre>
+  </body>
+</html>

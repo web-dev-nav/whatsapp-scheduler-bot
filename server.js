@@ -98,6 +98,53 @@ function createAccount(name) {
   return account;
 }
 
+async function deleteAccount(accountId) {
+  const account = getAccount(accountId);
+
+  if (!account) {
+    return { ok: false, statusCode: 404, error: `Unknown account "${accountId}".` };
+  }
+
+  if (account.id === 'main') {
+    return {
+      ok: false,
+      statusCode: 400,
+      error: 'The main account cannot be removed. Log it out instead, or remove added accounts.',
+    };
+  }
+
+  const runtime = runtimes.get(account.id);
+  if (runtime) {
+    clearScheduler(runtime);
+    clearWhatsappRestart(runtime);
+
+    if (runtime.client) {
+      try {
+        await runtime.client.destroy();
+      } catch (error) {
+        addSchedulerLog(runtime, 'error', 'Could not destroy WhatsApp client while removing account.', {
+          error: error.message,
+        });
+      }
+    }
+
+    runtimes.delete(account.id);
+  }
+
+  const accounts = readAccounts().filter((candidate) => candidate.id !== account.id);
+  writeAccounts(accounts.length ? accounts : [{ id: 'main', name: 'Main' }]);
+
+  const paths = accountPaths(account);
+  if (paths.dataDir !== DATA_DIR && paths.dataDir.startsWith(path.join(DATA_DIR, 'accounts'))) {
+    fs.rmSync(paths.dataDir, { recursive: true, force: true });
+    setTimeout(() => {
+      fs.rmSync(paths.dataDir, { recursive: true, force: true });
+    }, 2000);
+  }
+
+  return { ok: true, account, accounts: readAccounts() };
+}
+
 function accountPaths(account) {
   if (account.id === 'main') {
     return {
@@ -826,6 +873,17 @@ const server = http.createServer(async (request, response) => {
       const payload = JSON.parse(body || '{}');
       const account = createAccount(payload.name);
       sendJson(response, 201, { account, accounts: readAccounts() });
+      return;
+    }
+
+    if (request.method === 'DELETE' && pathname === '/api/accounts') {
+      const result = await deleteAccount(accountFromUrl(url));
+      if (!result.ok) {
+        sendJson(response, result.statusCode || 400, { error: result.error });
+        return;
+      }
+
+      sendJson(response, 200, { account: result.account, accounts: result.accounts });
       return;
     }
 

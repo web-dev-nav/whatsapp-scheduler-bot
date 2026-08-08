@@ -5,7 +5,7 @@
  * radius. The actual send happens server-side (POST /api/patrol/trigger); this
  * page only detects location and calls that webhook. */
 
-const DEFAULT_CENTER = [43.6532, -79.3832]; // Toronto fallback
+const DEFAULT_CENTER = [43.1394, -80.2644]; // Brantford, Ontario fallback
 const DEFAULT_RADIUS = 60; // meters
 const RE_ARM_MARGIN = 25; // must leave radius + this many meters before it can fire again
 
@@ -122,8 +122,9 @@ async function refreshConnection() {
 async function loadConfig() {
   const response = await fetch(`/api/config?${accountQuery()}`);
   const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Unable to load patrol settings.');
   loadedConfig = data.config;
-  checkpoints = (loadedConfig.patrol && loadedConfig.patrol.checkpoints) || [];
+  checkpoints = [...((loadedConfig.patrol && loadedConfig.patrol.checkpoints) || [])];
   el('targetGroup').textContent = loadedConfig.groupName || 'your group';
 }
 
@@ -131,7 +132,19 @@ async function saveCheckpoints() {
   if (!loadedConfig) return;
   // Read current UI values back into the checkpoint objects before saving.
   syncCheckpointsFromInputs();
-  loadedConfig.patrol = { checkpoints };
+
+  const nextConfig = {
+    ...loadedConfig,
+    patrol: {
+      checkpoints: checkpoints.map((checkpoint, index) => ({
+        id: checkpoint.id || `cp-${index + 1}`,
+        name: checkpoint.name || `Checkpoint ${index + 1}`,
+        lat: Number(checkpoint.lat),
+        lng: Number(checkpoint.lng),
+        radiusMeters: Number(checkpoint.radiusMeters) || DEFAULT_RADIUS,
+      })),
+    },
+  };
 
   const button = el('saveCheckpoints');
   button.disabled = true;
@@ -140,15 +153,13 @@ async function saveCheckpoints() {
     const response = await fetch(`/api/config?${accountQuery()}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config: loadedConfig }),
+      body: JSON.stringify({ config: nextConfig }),
     });
     if (!response.ok) throw new Error((await response.json()).error || 'Save failed');
-    const data = await response.json();
-    loadedConfig = data.config;
-    checkpoints = loadedConfig.patrol.checkpoints;
+    await loadConfig();
     renderCheckpoints();
     renderMapCheckpoints();
-    toast('Checkpoints saved.', 'ok');
+    toast(`${checkpoints.length} checkpoint${checkpoints.length === 1 ? '' : 's'} saved.`, 'ok');
   } catch (error) {
     toast(`Could not save: ${error.message}`, 'err');
   } finally {

@@ -4,17 +4,82 @@ Local WhatsApp patrol scheduler with a browser UI, QR login, schedule preview, a
 
 This project uses `whatsapp-web.js`, which automates WhatsApp Web through a linked-device session. It is not the official WhatsApp Business API.
 
-## Requirements
+## Installation
 
-- Node.js 18 or newer
+### 1. Install Requirements
+
+Install these first:
+
+- Node.js `18` or newer
+- npm, included with Node.js
+- Google Chrome or Chromium, used by `whatsapp-web.js`
 - A WhatsApp account that can access the target group or chat
-- The computer/server must stay awake and online while the scheduler is running
+- A computer/server that stays awake and online while the scheduler is running
 
-## Start The App
+Check Node.js:
+
+```bash
+node -v
+npm -v
+```
+
+This project supports Node versions:
+
+```text
+>=18 <27
+```
+
+### 2. Download The Repo
+
+Clone the repo:
+
+```bash
+git clone git@github-personal:web-dev-nav/whatsapp-scheduler-bot.git
+cd whatsapp-scheduler-bot
+```
+
+Or, if the repo is already on your computer:
 
 ```bash
 cd /Users/navjotsingh/Github/whatsapp-scheduler-bot
+git pull
+```
+
+### 3. Install Dependencies
+
+```bash
 npm install
+```
+
+### 4. Optional Environment Settings
+
+The app works without a `.env` file for local use. By default it runs on:
+
+```text
+http://127.0.0.1:3000
+```
+
+For a normal local install, you can skip this step.
+
+If you plan to expose the app through Tailscale Funnel, ngrok, Cloudflare Tunnel, Forge, or any public URL, set a patrol token so random visitors cannot trigger WhatsApp messages:
+
+```bash
+PATROL_TOKEN=change-this-token npm run ui
+```
+
+You can also create a `.env` file:
+
+```bash
+HOST=127.0.0.1
+PORT=3000
+PATROL_TOKEN=change-this-token
+```
+
+The token is only needed for the GPS patrol webhook. When `PATROL_TOKEN` is set, enter the same value in the **Patrol webhook token** field on `/patrol.html`.
+
+### 5. Start The App
+
+```bash
 npm run ui
 ```
 
@@ -24,7 +89,111 @@ Open:
 http://127.0.0.1:3000
 ```
 
-`npm run ui` starts the browser UI, WhatsApp connection, and scheduled sender in one process.
+`npm run ui` starts the browser UI, WhatsApp connection, scheduled sender, and GPS patrol webhook in one process.
+
+### 6. Link WhatsApp
+
+If WhatsApp is not linked yet, the UI shows a QR code.
+
+On your phone:
+
+```text
+WhatsApp > Settings > Linked Devices > Link a Device
+```
+
+Scan the QR code shown by the app. After linking, the app will load your WhatsApp chats and groups.
+
+### 7. Configure The Scheduler
+
+In the browser UI:
+
+1. Choose the WhatsApp group or chat.
+2. Set the message text.
+3. Choose the shift days and shift time.
+4. Turn automatic sending on or off.
+5. Save the setup.
+
+Use the schedule preview and activity log to confirm the setup.
+
+### 8. Use GPS Patrol Mode
+
+Open:
+
+```text
+http://127.0.0.1:3000/patrol.html
+```
+
+Then:
+
+1. Select the sending account.
+2. Enter the patrol webhook token if you started the app with `PATROL_TOKEN`.
+3. Tap the map or use **Drop at my location** to add checkpoints.
+4. Set the radius for each checkpoint.
+5. Click **Save checkpoints**.
+6. Click **Test connection (dry run — no message)**.
+7. Click **Start live patrol** when you are ready.
+
+When the phone enters a checkpoint circle, the server sends the saved WhatsApp patrol message.
+
+### 9. iPhone And Tailscale Funnel Setup
+
+Your iPhone cannot use your home Mac's `127.0.0.1` address. For real patrol use from a home Mac, expose the app with HTTPS.
+
+Example with Tailscale Funnel:
+
+```bash
+PATROL_TOKEN=change-this-token npm run ui
+```
+
+In another terminal:
+
+```bash
+tailscale funnel 3000
+```
+
+Open the HTTPS Funnel URL on your iPhone:
+
+```text
+https://your-mac-name.your-tailnet.ts.net/patrol.html
+```
+
+Enter the same patrol token in the page. Then run the dry-run test.
+
+Important iPhone notes:
+
+- iPhone Safari requires HTTPS for GPS on non-localhost pages.
+- Keep the Patrol Mode page open and the phone awake during live patrol.
+- If you want background triggering with the screen off, use iPhone Shortcuts automation with the webhook URL.
+
+### 10. Verify The Install
+
+Run the syntax check:
+
+```bash
+npm run check
+```
+
+Preview the schedule in the terminal:
+
+```bash
+npm run list:schedule
+```
+
+Dry-run the GPS webhook without sending a message:
+
+```bash
+curl -sS -X POST 'http://127.0.0.1:3000/api/patrol/trigger?account=main&dryRun=1' \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"install-test"}'
+```
+
+If `PATROL_TOKEN` is set, include it:
+
+```bash
+curl -sS -X POST 'http://127.0.0.1:3000/api/patrol/trigger?account=main&dryRun=1&token=change-this-token' \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"install-test"}'
+```
 
 ## Deploy To Laravel Forge
 

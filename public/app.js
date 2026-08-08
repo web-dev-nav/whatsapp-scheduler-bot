@@ -36,6 +36,7 @@ const accountSelect = el('accountSelect');
 const accountForm = el('accountForm');
 const accountName = el('accountName');
 const logoutWhatsapp = el('logoutWhatsapp');
+const deleteAccountButton = el('deleteAccount');
 
 // --- Dashboard ---
 const summaryBadge = el('summaryBadge');
@@ -243,6 +244,8 @@ function renderAccountOptions() {
     select.value = currentAccountId;
   });
   accountChipName.textContent = currentAccountName();
+  deleteAccountButton.disabled = currentAccountId === 'main';
+  deleteAccountButton.textContent = currentAccountId === 'main' ? 'Main account cannot be removed' : 'Remove this account';
 }
 
 async function loadAccounts() {
@@ -275,6 +278,35 @@ async function addAccount(name) {
   localStorage.setItem('currentAccountId', currentAccountId);
   renderAccountOptions();
   closeAccountMenu();
+  await switchToCurrentAccount();
+}
+
+async function deleteCurrentAccount() {
+  const accountNameToDelete = currentAccountName();
+  if (currentAccountId === 'main') {
+    setSaveStatus('The main account cannot be removed. Use logout instead.', 'error');
+    return;
+  }
+
+  if (!window.confirm(`Remove "${accountNameToDelete}" and delete its saved WhatsApp session/settings?`)) {
+    return;
+  }
+
+  deleteAccountButton.disabled = true;
+  deleteAccountButton.textContent = 'Removing...';
+
+  const response = await fetch(`/api/accounts?${accountQuery()}`, { method: 'DELETE' });
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload.error || 'Unable to remove account.');
+  }
+
+  accounts = payload.accounts || [];
+  currentAccountId = accounts[0]?.id || 'main';
+  localStorage.setItem('currentAccountId', currentAccountId);
+  renderAccountOptions();
+  closeAccountMenu();
+  setSaveStatus(`Removed "${accountNameToDelete}".`, 'success');
   await switchToCurrentAccount();
 }
 
@@ -1182,6 +1214,14 @@ logoutWhatsapp.addEventListener('click', () => {
   logoutWhatsappSession().catch((error) => {
     loginStatus.textContent = error.message;
     logoutWhatsapp.disabled = false;
+  });
+});
+
+deleteAccountButton.addEventListener('click', () => {
+  deleteCurrentAccount().catch((error) => {
+    setSaveStatus(error.message, 'error');
+    deleteAccountButton.disabled = currentAccountId === 'main';
+    renderAccountOptions();
   });
 });
 
