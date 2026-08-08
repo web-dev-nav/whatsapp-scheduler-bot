@@ -11,6 +11,7 @@ const RE_ARM_MARGIN = 25; // must leave radius + this many meters before it can 
 
 let currentAccountId = localStorage.getItem('currentAccountId') || 'main';
 let loadedConfig = null; // full config object, so we can PUT it back intact
+let accounts = [];
 let checkpoints = []; // [{ id, name, lat, lng, radiusMeters }]
 let map = null;
 let markerLayers = new Map(); // id -> { marker, circle }
@@ -21,6 +22,147 @@ const armed = new Map(); // checkpoint id -> true when ready to fire (left the z
 
 const el = (id) => document.getElementById(id);
 const accountQuery = () => `account=${encodeURIComponent(currentAccountId)}`;
+
+function accountAuthKey(accountId = currentAccountId) {
+  return `accountAuth:${accountId}`;
+}
+
+function accountAuthToken(accountId = currentAccountId) {
+  return sessionStorage.getItem(accountAuthKey(accountId)) || '';
+}
+
+function setAccountAuthToken(accountId, token) {
+  if (token) sessionStorage.setItem(accountAuthKey(accountId), token);
+  else sessionStorage.removeItem(accountAuthKey(accountId));
+}
+
+function accountAuthHeaders(accountId = currentAccountId, headers = {}) {
+  const token = accountAuthToken(accountId);
+  return token ? { ...headers, 'X-Account-Auth': token } : headers;
+}
+
+function accountById(accountId) {
+  return accounts.find((account) => account.id === accountId);
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (ch) => {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+  });
+}
+
+function requestPassword({ title, label, submitText }) {
+  return new Promise((resolve) => {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'password-dialog-backdrop';
+    backdrop.innerHTML = `
+      <form class="password-dialog">
+        <h2>${escapeHtml(title)}</h2>
+        <label class="field">
+          <span>${escapeHtml(label)}</span>
+          <input type="password" autocomplete="current-password" minlength="4" required />
+        </label>
+        <div class="password-dialog-actions">
+          <button class="btn btn-ghost" type="button" data-cancel>Cancel</button>
+          <button class="btn btn-primary" type="submit">${escapeHtml(submitText)}</button>
+        </div>
+      </form>
+    `;
+
+    const form = backdrop.querySelector('form');
+    const input = backdrop.querySelector('input');
+    const close = (value) => {
+      backdrop.remove();
+      resolve(value);
+    };
+
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      close(input.value);
+    });
+    backdrop.querySelector('[data-cancel]').addEventListener('click', () => close(null));
+    backdrop.addEventListener('click', (event) => {
+      if (event.target === backdrop) close(null);
+    });
+
+    document.body.append(backdrop);
+    input.focus();
+  });
+}
+
+async function setInitialAccountPassword(account) {
+  const password = await requestPassword({
+    title: `Protect ${account.name}`,
+    label: 'Create password',
+    submitText: 'Save password',
+  });
+  if (password === null) return false;
+
+  const response = await fetch('/api/accounts/password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ account: account.id, password }),
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || 'Unable to set password.');
+
+  accounts = payload.accounts || accounts.map((candidate) => (
+    candidate.id === account.id ? { ...candidate, hasPassword: true } : candidate
+  ));
+  setAccountAuthToken(account.id, payload.token);
+  return true;
+}
+
+async function loginToAccount(account) {
+  const password = await requestPassword({
+    title: `Unlock ${account.name}`,
+    label: 'Password',
+    submitText: 'Unlock',
+  });
+  if (password === null) return false;
+
+  const response = await fetch('/api/accounts/auth', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ account: account.id, password }),
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || 'Unable to unlock account.');
+
+  setAccountAuthToken(account.id, payload.token);
+  return true;
+}
+
+async function ensureAccountAccess(accountId = currentAccountId) {
+  if (accountAuthToken(accountId)) return true;
+
+  const account = accountById(accountId);
+  if (!account) throw new Error(`Unknown account "${accountId}".`);
+  if (!account.hasPassword) return setInitialAccountPassword(account);
+  return loginToAccount(account);
+}
+
+async function fetchWithAccountAuth(url, options = {}, accountId = currentAccountId) {
+  const withAuth = {
+    ...options,
+    headers: accountAuthHeaders(accountId, options.headers || {}),
+  };
+  let response = await fetch(url, withAuth);
+
+  if (response.status !== 401 && response.status !== 423) {
+    return response;
+  }
+
+  setAccountAuthToken(accountId, '');
+  const unlocked = await ensureAccountAccess(accountId);
+  if (!unlocked) return response;
+
+  response = await fetch(url, {
+    ...options,
+    headers: accountAuthHeaders(accountId, options.headers || {}),
+  });
+  return response;
+}
 
 function patrolTokenKey() {
   return `patrolToken:${currentAccountId}`;
@@ -77,7 +219,7 @@ function distanceMeters(lat1, lng1, lat2, lng2) {
 async function loadAccounts() {
   const response = await fetch(`/api/accounts?t=${Date.now()}`, { cache: 'no-store' });
   const data = await response.json();
-  const accounts = data.accounts || [];
+  accounts = data.accounts || [];
   const select = el('accountSelect');
   select.innerHTML = '';
 
@@ -97,7 +239,9 @@ async function loadAccounts() {
 /* ---------- WhatsApp connection status ---------- */
 async function refreshConnection() {
   try {
-    const response = await fetch(`/api/whatsapp?${accountQuery()}&t=${Date.now()}`, { cache: 'no-store' });
+    const response = await fetchWithAccountAuth(`/api/whatsapp?${accountQuery()}&t=${Date.now()}`, {
+      cache: 'no-store',
+    });
     const data = await response.json();
     const dot = el('connDot');
     const text = el('connText');
@@ -120,7 +264,7 @@ async function refreshConnection() {
 
 /* ---------- config / checkpoints ---------- */
 async function loadConfig() {
-  const response = await fetch(`/api/config?${accountQuery()}`);
+  const response = await fetchWithAccountAuth(`/api/config?${accountQuery()}`);
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || 'Unable to load patrol settings.');
   loadedConfig = data.config;
@@ -150,7 +294,7 @@ async function saveCheckpoints() {
   button.disabled = true;
   button.textContent = 'Saving…';
   try {
-    const response = await fetch(`/api/config?${accountQuery()}`, {
+    const response = await fetchWithAccountAuth(`/api/config?${accountQuery()}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ config: nextConfig }),
@@ -414,7 +558,7 @@ async function fireTrigger(checkpoint) {
   el('liveStatus').textContent = `Reached ${checkpoint.name} — sending…`;
   savePatrolTokenInput();
   try {
-    const response = await fetch(`/api/patrol/trigger?${patrolTriggerQuery()}`, {
+    const response = await fetchWithAccountAuth(`/api/patrol/trigger?${patrolTriggerQuery()}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ source: 'patrol-gps', checkpointName: checkpoint.name }),
@@ -436,7 +580,7 @@ async function fireTrigger(checkpoint) {
 async function testTrigger() {
   savePatrolTokenInput();
   try {
-    const response = await fetch(`/api/patrol/trigger?${patrolTriggerQuery('dryRun=1')}`, {
+    const response = await fetchWithAccountAuth(`/api/patrol/trigger?${patrolTriggerQuery('dryRun=1')}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ source: 'patrol-test' }),
@@ -482,9 +626,18 @@ function recenter() {
 /* ---------- init ---------- */
 async function switchAccount(accountId) {
   stopPatrol();
+  const previousAccountId = currentAccountId;
   currentAccountId = accountId;
   localStorage.setItem('currentAccountId', accountId);
   loadPatrolTokenInput();
+  const unlocked = await ensureAccountAccess(accountId);
+  if (!unlocked) {
+    currentAccountId = previousAccountId;
+    localStorage.setItem('currentAccountId', previousAccountId);
+    el('accountSelect').value = previousAccountId;
+    loadPatrolTokenInput();
+    return;
+  }
   await loadConfig();
   renderCheckpoints();
   renderMapCheckpoints();
@@ -495,11 +648,7 @@ async function switchAccount(accountId) {
 async function init() {
   await loadAccounts();
   loadPatrolTokenInput();
-  await loadConfig();
-  renderCheckpoints();
   initMap();
-  refreshConnection();
-  setInterval(refreshConnection, 10000);
   el('secureContextWarning').hidden = window.isSecureContext;
 
   el('accountSelect').addEventListener('change', (e) => switchAccount(e.target.value));
@@ -510,6 +659,16 @@ async function init() {
   el('testTrigger').addEventListener('click', testTrigger);
   el('useMyLocation').addEventListener('click', dropAtMyLocation);
   el('recenter').addEventListener('click', recenter);
+
+  const unlocked = await ensureAccountAccess(currentAccountId);
+  if (!unlocked) {
+    toast('Account locked. Select an account and enter its password to continue.', 'err');
+    return;
+  }
+  await loadConfig();
+  renderCheckpoints();
+  refreshConnection();
+  setInterval(refreshConnection, 10000);
 }
 
 init();

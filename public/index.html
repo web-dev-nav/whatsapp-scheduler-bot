@@ -32,6 +32,7 @@
               </label>
               <form class="inline-add" id="loginAccountForm">
                 <input id="loginAccountName" type="text" autocomplete="off" placeholder="New account name" />
+                <input id="loginAccountPassword" type="password" autocomplete="new-password" placeholder="Password" minlength="4" />
                 <button class="btn btn-ghost" type="submit">Add</button>
               </form>
             </div>
@@ -58,8 +59,10 @@
                 <span>Sending account</span>
                 <select id="accountSelect"></select>
               </label>
+              <div class="account-list" id="accountList" aria-label="Saved accounts"></div>
               <form class="inline-add" id="accountForm">
                 <input id="accountName" type="text" autocomplete="off" placeholder="Add another account" />
+                <input id="accountPassword" type="password" autocomplete="new-password" placeholder="Password" minlength="4" />
                 <button class="btn btn-ghost" type="submit">Add</button>
               </form>
               <button class="btn btn-danger-ghost" id="logoutWhatsapp" type="button">Log out this account</button>

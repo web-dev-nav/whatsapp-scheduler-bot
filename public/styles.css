@@ -298,6 +298,53 @@ button {
   font-size: 13px;
 }
 
+.account-list {
+  display: grid;
+  gap: 6px;
+}
+
+.account-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.account-row-select,
+.account-row-remove {
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  font: inherit;
+}
+
+.account-row-select {
+  overflow: hidden;
+  padding: 0 10px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.account-row.is-current .account-row-select {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.account-row-remove {
+  padding: 0 9px;
+  color: var(--danger);
+  cursor: pointer;
+}
+
+.account-row-remove:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
 /* ---------- Cards ---------- */
 .card {
   margin-top: 16px;
@@ -619,6 +666,48 @@ textarea:focus {
 .inline-add {
   display: grid;
   grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.inline-add input[type='password'] {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.inline-add .btn {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: stretch;
+}
+
+.password-dialog-backdrop {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.password-dialog {
+  display: grid;
+  gap: 14px;
+  width: min(100%, 360px);
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  box-shadow: var(--shadow);
+}
+
+.password-dialog h2 {
+  font-size: 18px;
+}
+
+.password-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
   gap: 8px;
 }
 

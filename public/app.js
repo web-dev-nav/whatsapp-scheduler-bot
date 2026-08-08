@@ -25,6 +25,7 @@ const scanSteps = el('scanSteps');
 const loginAccountSelect = el('loginAccountSelect');
 const loginAccountForm = el('loginAccountForm');
 const loginAccountName = el('loginAccountName');
+const loginAccountPassword = el('loginAccountPassword');
 
 // --- Header / account menu ---
 const accountMenuButton = el('accountMenuButton');
@@ -33,8 +34,10 @@ const accountChipName = el('accountChipName');
 const connectionDot = el('connectionDot');
 const whatsappStatus = el('whatsappStatus');
 const accountSelect = el('accountSelect');
+const accountList = el('accountList');
 const accountForm = el('accountForm');
 const accountName = el('accountName');
+const accountPassword = el('accountPassword');
 const logoutWhatsapp = el('logoutWhatsapp');
 const deleteAccountButton = el('deleteAccount');
 
@@ -228,8 +231,168 @@ function accountQuery() {
   return `account=${encodeURIComponent(currentAccountId)}`;
 }
 
+function accountAuthKey(accountId = currentAccountId) {
+  return `accountAuth:${accountId}`;
+}
+
+function accountAuthToken(accountId = currentAccountId) {
+  return sessionStorage.getItem(accountAuthKey(accountId)) || '';
+}
+
+function setAccountAuthToken(accountId, token) {
+  if (token) sessionStorage.setItem(accountAuthKey(accountId), token);
+  else sessionStorage.removeItem(accountAuthKey(accountId));
+}
+
+function accountAuthHeaders(accountId = currentAccountId, headers = {}) {
+  const token = accountAuthToken(accountId);
+  return token ? { ...headers, 'X-Account-Auth': token } : headers;
+}
+
+function accountById(accountId) {
+  return accounts.find((account) => account.id === accountId);
+}
+
+function requestPassword({ title, label, submitText }) {
+  return new Promise((resolve) => {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'password-dialog-backdrop';
+    backdrop.innerHTML = `
+      <form class="password-dialog">
+        <h2>${escapeHtml(title)}</h2>
+        <label class="field">
+          <span>${escapeHtml(label)}</span>
+          <input type="password" autocomplete="current-password" minlength="4" required />
+        </label>
+        <div class="password-dialog-actions">
+          <button class="btn btn-ghost" type="button" data-cancel>Cancel</button>
+          <button class="btn btn-primary" type="submit">${escapeHtml(submitText)}</button>
+        </div>
+      </form>
+    `;
+
+    const form = backdrop.querySelector('form');
+    const input = backdrop.querySelector('input');
+    const close = (value) => {
+      backdrop.remove();
+      resolve(value);
+    };
+
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      close(input.value);
+    });
+    backdrop.querySelector('[data-cancel]').addEventListener('click', () => close(null));
+    backdrop.addEventListener('click', (event) => {
+      if (event.target === backdrop) close(null);
+    });
+
+    document.body.append(backdrop);
+    input.focus();
+  });
+}
+
 function currentAccountName() {
-  return accounts.find((account) => account.id === currentAccountId)?.name || currentAccountId;
+  return accountById(currentAccountId)?.name || currentAccountId;
+}
+
+async function setInitialAccountPassword(account) {
+  const password = await requestPassword({
+    title: `Protect ${account.name}`,
+    label: 'Create password',
+    submitText: 'Save password',
+  });
+  if (password === null) return false;
+
+  const response = await fetch('/api/accounts/password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ account: account.id, password }),
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || 'Unable to set password.');
+
+  accounts = payload.accounts || accounts.map((candidate) => (
+    candidate.id === account.id ? { ...candidate, hasPassword: true } : candidate
+  ));
+  setAccountAuthToken(account.id, payload.token);
+  renderAccountOptions();
+  return true;
+}
+
+async function loginToAccount(account) {
+  const password = await requestPassword({
+    title: `Unlock ${account.name}`,
+    label: 'Password',
+    submitText: 'Unlock',
+  });
+  if (password === null) return false;
+
+  const response = await fetch('/api/accounts/auth', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ account: account.id, password }),
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || 'Unable to unlock account.');
+
+  setAccountAuthToken(account.id, payload.token);
+  return true;
+}
+
+async function ensureAccountAccess(accountId = currentAccountId) {
+  if (accountAuthToken(accountId)) return true;
+
+  const account = accountById(accountId);
+  if (!account) throw new Error(`Unknown account "${accountId}".`);
+  if (!account.hasPassword) return setInitialAccountPassword(account);
+  return loginToAccount(account);
+}
+
+async function fetchWithAccountAuth(url, options = {}, accountId = currentAccountId) {
+  const withAuth = {
+    ...options,
+    headers: accountAuthHeaders(accountId, options.headers || {}),
+  };
+  let response = await fetch(url, withAuth);
+
+  if (response.status !== 401 && response.status !== 423) {
+    return response;
+  }
+
+  setAccountAuthToken(accountId, '');
+  const unlocked = await ensureAccountAccess(accountId);
+  if (!unlocked) return response;
+
+  response = await fetch(url, {
+    ...options,
+    headers: accountAuthHeaders(accountId, options.headers || {}),
+  });
+  return response;
+}
+
+function renderAccountList() {
+  accountList.innerHTML = '';
+  accounts.forEach((account) => {
+    const row = document.createElement('div');
+    row.className = `account-row${account.id === currentAccountId ? ' is-current' : ''}`;
+
+    const selectButton = document.createElement('button');
+    selectButton.className = 'account-row-select';
+    selectButton.type = 'button';
+    selectButton.dataset.accountId = account.id;
+    selectButton.textContent = account.name;
+
+    const removeButton = document.createElement('button');
+    removeButton.className = 'account-row-remove';
+    removeButton.type = 'button';
+    removeButton.dataset.accountId = account.id;
+    removeButton.textContent = account.id === 'main' ? 'Protected' : 'Remove';
+    removeButton.disabled = account.id === 'main';
+
+    row.append(selectButton, removeButton);
+    accountList.append(row);
+  });
 }
 
 function renderAccountOptions() {
@@ -243,6 +406,7 @@ function renderAccountOptions() {
     });
     select.value = currentAccountId;
   });
+  renderAccountList();
   accountChipName.textContent = currentAccountName();
   deleteAccountButton.disabled = currentAccountId === 'main';
   deleteAccountButton.textContent = currentAccountId === 'main' ? 'Main account cannot be removed' : 'Remove this account';
@@ -261,32 +425,37 @@ async function loadAccounts() {
   renderAccountOptions();
 }
 
-async function addAccount(name) {
+async function addAccount(name, password) {
   const trimmed = name.trim();
   if (!trimmed) return;
 
   const response = await fetch('/api/accounts', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: trimmed }),
+    body: JSON.stringify({ name: trimmed, password }),
   });
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || 'Unable to add account.');
 
   accounts = payload.accounts || accounts;
   currentAccountId = payload.account.id;
+  setAccountAuthToken(currentAccountId, payload.token);
   localStorage.setItem('currentAccountId', currentAccountId);
   renderAccountOptions();
   closeAccountMenu();
   await switchToCurrentAccount();
 }
 
-async function deleteCurrentAccount() {
-  const accountNameToDelete = currentAccountName();
-  if (currentAccountId === 'main') {
+async function deleteAccountById(accountId) {
+  const account = accountById(accountId);
+  const accountNameToDelete = account?.name || accountId;
+  if (accountId === 'main') {
     setSaveStatus('The main account cannot be removed. Use logout instead.', 'error');
     return;
   }
+
+  const unlocked = await ensureAccountAccess(accountId);
+  if (!unlocked) return;
 
   if (!window.confirm(`Remove "${accountNameToDelete}" and delete its saved WhatsApp session/settings?`)) {
     return;
@@ -295,19 +464,28 @@ async function deleteCurrentAccount() {
   deleteAccountButton.disabled = true;
   deleteAccountButton.textContent = 'Removing...';
 
-  const response = await fetch(`/api/accounts?${accountQuery()}`, { method: 'DELETE' });
+  const response = await fetchWithAccountAuth(`/api/accounts?account=${encodeURIComponent(accountId)}`, {
+    method: 'DELETE',
+  }, accountId);
   const payload = await response.json();
   if (!response.ok) {
     throw new Error(payload.error || 'Unable to remove account.');
   }
 
   accounts = payload.accounts || [];
-  currentAccountId = accounts[0]?.id || 'main';
+  setAccountAuthToken(accountId, '');
+  if (accountId === currentAccountId || !accounts.some((candidate) => candidate.id === currentAccountId)) {
+    currentAccountId = accounts[0]?.id || 'main';
+  }
   localStorage.setItem('currentAccountId', currentAccountId);
   renderAccountOptions();
   closeAccountMenu();
   setSaveStatus(`Removed "${accountNameToDelete}".`, 'success');
   await switchToCurrentAccount();
+}
+
+async function deleteCurrentAccount() {
+  await deleteAccountById(currentAccountId);
 }
 
 async function switchToCurrentAccount() {
@@ -317,13 +495,31 @@ async function switchToCurrentAccount() {
   renderChatOptions([], groupNameInput.value);
   await loadSettings();
   await loadWhatsappState();
+  scheduleWhatsappPoll(isConnected ? 5000 : 1000);
 }
 
 async function switchAccount(accountId) {
   if (accountId === currentAccountId) return;
+  const previousAccountId = currentAccountId;
   currentAccountId = accountId;
   localStorage.setItem('currentAccountId', currentAccountId);
   renderAccountOptions();
+
+  try {
+    const unlocked = await ensureAccountAccess(currentAccountId);
+    if (!unlocked) {
+      currentAccountId = previousAccountId;
+      localStorage.setItem('currentAccountId', currentAccountId);
+      renderAccountOptions();
+      return;
+    }
+  } catch (error) {
+    currentAccountId = previousAccountId;
+    localStorage.setItem('currentAccountId', currentAccountId);
+    renderAccountOptions();
+    throw error;
+  }
+
   closeAccountMenu();
   await switchToCurrentAccount();
 }
@@ -792,7 +988,9 @@ function renderSchedulerLogs(logs) {
 }
 
 async function loadSchedulerLogs() {
-  const response = await fetch(`/api/logs?${accountQuery()}&t=${Date.now()}`, { cache: 'no-store' });
+  const response = await fetchWithAccountAuth(`/api/logs?${accountQuery()}&t=${Date.now()}`, {
+    cache: 'no-store',
+  });
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || 'Unable to load logs.');
   renderSchedulerLogs(payload.logs || []);
@@ -918,7 +1116,9 @@ function showConnectedApp(payload) {
 }
 
 async function loadWhatsappState() {
-  const response = await fetch(`/api/whatsapp?${accountQuery()}&t=${Date.now()}`, { cache: 'no-store' });
+  const response = await fetchWithAccountAuth(`/api/whatsapp?${accountQuery()}&t=${Date.now()}`, {
+    cache: 'no-store',
+  });
   const payload = await response.json();
 
   if (!response.ok) {
@@ -960,7 +1160,9 @@ async function logoutWhatsappSession() {
   qrCode.removeAttribute('src');
   renderChatOptions([], groupNameInput.value);
 
-  const response = await fetch(`/api/whatsapp/logout?${accountQuery()}`, { method: 'POST' });
+  const response = await fetchWithAccountAuth(`/api/whatsapp/logout?${accountQuery()}`, {
+    method: 'POST',
+  });
   const payload = await response.json();
   if (!response.ok) {
     loginStatus.textContent = payload.error || 'Logout failed.';
@@ -975,7 +1177,7 @@ async function logoutWhatsappSession() {
 
 // ---------- Load / save config ----------
 async function loadSettings() {
-  const response = await fetch(`/api/config?${accountQuery()}`);
+  const response = await fetchWithAccountAuth(`/api/config?${accountQuery()}`);
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || 'Unable to load settings.');
 
@@ -987,7 +1189,7 @@ async function loadSettings() {
 
 async function saveSettings() {
   setSaveStatus('Saving…');
-  const response = await fetch(`/api/config?${accountQuery()}`, {
+  const response = await fetchWithAccountAuth(`/api/config?${accountQuery()}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ config: readForm() }),
@@ -1190,20 +1392,39 @@ accountMenuButton.addEventListener('click', () => {
   });
 });
 
+accountList.addEventListener('click', (event) => {
+  const removeButton = event.target.closest('.account-row-remove');
+  const selectButton = event.target.closest('.account-row-select');
+
+  if (removeButton) {
+    deleteAccountById(removeButton.dataset.accountId).catch((error) => {
+      setSaveStatus(error.message, 'error');
+      renderAccountOptions();
+    });
+    return;
+  }
+
+  if (selectButton) {
+    switchAccount(selectButton.dataset.accountId).catch((error) => setSaveStatus(error.message, 'error'));
+  }
+});
+
 accountForm.addEventListener('submit', (event) => {
   event.preventDefault();
-  addAccount(accountName.value)
+  addAccount(accountName.value, accountPassword.value)
     .then(() => {
       accountName.value = '';
+      accountPassword.value = '';
     })
     .catch((error) => setSaveStatus(error.message, 'error'));
 });
 
 loginAccountForm.addEventListener('submit', (event) => {
   event.preventDefault();
-  addAccount(loginAccountName.value)
+  addAccount(loginAccountName.value, loginAccountPassword.value)
     .then(() => {
       loginAccountName.value = '';
+      loginAccountPassword.value = '';
     })
     .catch((error) => {
       loginStatus.textContent = error.message;
@@ -1227,13 +1448,21 @@ deleteAccountButton.addEventListener('click', () => {
 
 // ---------- Startup ----------
 loadAccounts()
-  .then(() => loadSettings())
+  .then(async () => {
+    const unlocked = await ensureAccountAccess(currentAccountId);
+    if (!unlocked) {
+      loginStatus.textContent = 'Account locked. Select an account and enter its password to continue.';
+      return;
+    }
+
+    await loadSettings();
+    scheduleWhatsappPoll();
+  })
   .catch((error) => {
     setSaveStatus(error.message, 'error');
     loginStatus.textContent = error.message;
   });
 
-scheduleWhatsappPoll();
 setInterval(() => {
   if (isConnected) loadSchedulerLogs().catch(() => {});
 }, 5000);

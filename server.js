@@ -34,6 +34,7 @@ const MS_PER_DAY = 24 * 60 * MS_PER_MINUTE;
 // must pass it as ?token= or an X-Patrol-Token header. Leave unset for local use.
 const PATROL_TOKEN = process.env.PATROL_TOKEN || '';
 const runtimes = new Map();
+const accountSessions = new Map();
 let shuttingDown = false;
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -68,6 +69,8 @@ function readAccounts() {
     .map((account) => ({
       id: slugifyAccountId(account.id || account.name),
       name: String(account.name || account.id || 'Account').trim() || 'Account',
+      passwordSalt: typeof account.passwordSalt === 'string' ? account.passwordSalt : '',
+      passwordHash: typeof account.passwordHash === 'string' ? account.passwordHash : '',
     }))
     .filter((account, index, list) => list.findIndex((candidate) => candidate.id === account.id) === index);
 }
@@ -76,11 +79,90 @@ function writeAccounts(accounts) {
   fs.writeFileSync(ACCOUNTS_PATH, `${JSON.stringify({ accounts }, null, 2)}\n`);
 }
 
+function publicAccount(account) {
+  return {
+    id: account.id,
+    name: account.name,
+    hasPassword: Boolean(account.passwordSalt && account.passwordHash),
+  };
+}
+
+function publicAccounts() {
+  return readAccounts().map(publicAccount);
+}
+
 function getAccount(accountId = 'main') {
   return readAccounts().find((account) => account.id === accountId);
 }
 
-function createAccount(name) {
+function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
+  const passwordHash = crypto.pbkdf2Sync(String(password), salt, 310000, 32, 'sha256').toString('hex');
+  return { passwordSalt: salt, passwordHash };
+}
+
+function verifyPassword(account, password) {
+  if (!account.passwordSalt || !account.passwordHash) return false;
+  const { passwordHash } = hashPassword(password, account.passwordSalt);
+  if (passwordHash.length !== account.passwordHash.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(passwordHash, 'hex'), Buffer.from(account.passwordHash, 'hex'));
+}
+
+function createAccountSession(accountId) {
+  const token = crypto.randomBytes(32).toString('hex');
+  accountSessions.set(token, { accountId, createdAt: Date.now() });
+  return token;
+}
+
+function authTokenFromRequest(request) {
+  return request.headers['x-account-auth'] || '';
+}
+
+function requireAccountAuth(request, response, accountId) {
+  const account = getAccount(accountId);
+  if (!account) {
+    sendJson(response, 404, { error: `Unknown account "${accountId}".` });
+    return false;
+  }
+
+  if (!account.passwordSalt || !account.passwordHash) {
+    sendJson(response, 423, {
+      error: `Set a password before opening "${account.name}".`,
+      requiresPasswordSetup: true,
+      account: publicAccount(account),
+    });
+    return false;
+  }
+
+  const token = authTokenFromRequest(request);
+  const session = accountSessions.get(token);
+  if (!session || session.accountId !== account.id) {
+    sendJson(response, 401, { error: `Enter the password for "${account.name}".`, requiresLogin: true });
+    return false;
+  }
+
+  return true;
+}
+
+function setAccountPassword(accountId, password) {
+  const trimmed = String(password || '');
+  if (trimmed.length < 4) {
+    return { ok: false, statusCode: 400, error: 'Password must be at least 4 characters.' };
+  }
+
+  const accounts = readAccounts();
+  const index = accounts.findIndex((account) => account.id === accountId);
+  if (index === -1) {
+    return { ok: false, statusCode: 404, error: `Unknown account "${accountId}".` };
+  }
+
+  const nextAccount = { ...accounts[index], ...hashPassword(trimmed) };
+  accounts[index] = nextAccount;
+  writeAccounts(accounts);
+
+  return { ok: true, account: nextAccount, token: createAccountSession(nextAccount.id) };
+}
+
+function createAccount(name, password) {
   const accounts = readAccounts();
   const baseId = slugifyAccountId(name);
   let id = baseId;
@@ -91,7 +173,12 @@ function createAccount(name) {
     suffix += 1;
   }
 
-  const account = { id, name: String(name || id).trim() || id };
+  const trimmedPassword = String(password || '');
+  if (trimmedPassword.length < 4) {
+    throw new Error('Password must be at least 4 characters.');
+  }
+
+  const account = { id, name: String(name || id).trim() || id, ...hashPassword(trimmedPassword) };
   accounts.push(account);
   writeAccounts(accounts);
   getRuntime(account.id);
@@ -864,76 +951,146 @@ const server = http.createServer(async (request, response) => {
     const pathname = url.pathname;
 
     if (request.method === 'GET' && pathname === '/api/accounts') {
-      sendJson(response, 200, { accounts: readAccounts() });
+      sendJson(response, 200, { accounts: publicAccounts() });
       return;
     }
 
     if (request.method === 'POST' && pathname === '/api/accounts') {
       const body = await readRequestBody(request);
       const payload = JSON.parse(body || '{}');
-      const account = createAccount(payload.name);
-      sendJson(response, 201, { account, accounts: readAccounts() });
+      const account = createAccount(payload.name, payload.password);
+      const token = createAccountSession(account.id);
+      sendJson(response, 201, { account: publicAccount(account), accounts: publicAccounts(), token });
       return;
     }
 
-    if (request.method === 'DELETE' && pathname === '/api/accounts') {
-      const result = await deleteAccount(accountFromUrl(url));
+    if (request.method === 'POST' && pathname === '/api/accounts/auth') {
+      const body = await readRequestBody(request);
+      const payload = JSON.parse(body || '{}');
+      const account = getAccount(payload.account || accountFromUrl(url));
+      if (!account) {
+        sendJson(response, 404, { error: `Unknown account "${payload.account || accountFromUrl(url)}".` });
+        return;
+      }
+
+      if (!account.passwordSalt || !account.passwordHash) {
+        sendJson(response, 423, {
+          error: `Set a password before opening "${account.name}".`,
+          requiresPasswordSetup: true,
+          account: publicAccount(account),
+        });
+        return;
+      }
+
+      if (!verifyPassword(account, payload.password || '')) {
+        sendJson(response, 401, { error: 'Incorrect password.' });
+        return;
+      }
+
+      sendJson(response, 200, { account: publicAccount(account), token: createAccountSession(account.id) });
+      return;
+    }
+
+    if (request.method === 'POST' && pathname === '/api/accounts/password') {
+      const body = await readRequestBody(request);
+      const payload = JSON.parse(body || '{}');
+      const accountId = payload.account || accountFromUrl(url);
+      const account = getAccount(accountId);
+      if (!account) {
+        sendJson(response, 404, { error: `Unknown account "${accountId}".` });
+        return;
+      }
+
+      if (account.passwordSalt && account.passwordHash && !requireAccountAuth(request, response, account.id)) {
+        return;
+      }
+
+      const result = setAccountPassword(account.id, payload.password);
       if (!result.ok) {
         sendJson(response, result.statusCode || 400, { error: result.error });
         return;
       }
 
-      sendJson(response, 200, { account: result.account, accounts: result.accounts });
+      sendJson(response, 200, { account: publicAccount(result.account), accounts: publicAccounts(), token: result.token });
+      return;
+    }
+
+    if (request.method === 'DELETE' && pathname === '/api/accounts') {
+      const accountId = accountFromUrl(url);
+      if (!requireAccountAuth(request, response, accountId)) return;
+
+      const result = await deleteAccount(accountId);
+      if (!result.ok) {
+        sendJson(response, result.statusCode || 400, { error: result.error });
+        return;
+      }
+
+      sendJson(response, 200, { account: publicAccount(result.account), accounts: publicAccounts() });
       return;
     }
 
     if (request.method === 'GET' && pathname === '/api/whatsapp') {
-      const runtime = requireRuntime(response, accountFromUrl(url));
+      const accountId = accountFromUrl(url);
+      if (!requireAccountAuth(request, response, accountId)) return;
+
+      const runtime = requireRuntime(response, accountId);
       if (!runtime) return;
 
       if (runtime.state.status === 'ready') {
         await refreshChats(runtime);
       }
 
-      sendJson(response, 200, { account: runtime.account, ...runtime.state });
+      sendJson(response, 200, { account: publicAccount(runtime.account), ...runtime.state });
       return;
     }
 
     if (request.method === 'POST' && pathname === '/api/whatsapp/logout') {
-      const runtime = requireRuntime(response, accountFromUrl(url));
+      const accountId = accountFromUrl(url);
+      if (!requireAccountAuth(request, response, accountId)) return;
+
+      const runtime = requireRuntime(response, accountId);
       if (!runtime) return;
 
       await logoutWhatsappClient(runtime);
-      sendJson(response, 200, { account: runtime.account, ...runtime.state });
+      sendJson(response, 200, { account: publicAccount(runtime.account), ...runtime.state });
       return;
     }
 
     if (request.method === 'GET' && pathname === '/api/config') {
-      const runtime = requireRuntime(response, accountFromUrl(url));
+      const accountId = accountFromUrl(url);
+      if (!requireAccountAuth(request, response, accountId)) return;
+
+      const runtime = requireRuntime(response, accountId);
       if (!runtime) return;
 
       const config = loadConfigFromPath(runtime.paths.configPath);
-      sendJson(response, 200, { account: runtime.account, config, preview: buildPreview(config) });
+      sendJson(response, 200, { account: publicAccount(runtime.account), config, preview: buildPreview(config) });
       return;
     }
 
     if (request.method === 'GET' && pathname === '/api/logs') {
-      const runtime = requireRuntime(response, accountFromUrl(url));
+      const accountId = accountFromUrl(url);
+      if (!requireAccountAuth(request, response, accountId)) return;
+
+      const runtime = requireRuntime(response, accountId);
       if (!runtime) return;
 
-      sendJson(response, 200, { account: runtime.account, logs: runtime.logs });
+      sendJson(response, 200, { account: publicAccount(runtime.account), logs: runtime.logs });
       return;
     }
 
     if (request.method === 'PUT' && pathname === '/api/config') {
-      const runtime = requireRuntime(response, accountFromUrl(url));
+      const accountId = accountFromUrl(url);
+      if (!requireAccountAuth(request, response, accountId)) return;
+
+      const runtime = requireRuntime(response, accountId);
       if (!runtime) return;
 
       const body = await readRequestBody(request);
       const payload = JSON.parse(body);
       const config = saveConfigToPath(runtime.paths.configPath, payload.config);
       scheduleNextPatrolMessage(runtime);
-      sendJson(response, 200, { account: runtime.account, config, preview: buildPreview(config) });
+      sendJson(response, 200, { account: publicAccount(runtime.account), config, preview: buildPreview(config) });
       return;
     }
 
@@ -947,6 +1104,8 @@ const server = http.createServer(async (request, response) => {
           sendJson(response, 401, { ok: false, error: 'Invalid or missing patrol token.' });
           return;
         }
+      } else if (!requireAccountAuth(request, response, accountFromUrl(url))) {
+        return;
       }
 
       const runtime = requireRuntime(response, accountFromUrl(url));
@@ -961,7 +1120,7 @@ const server = http.createServer(async (request, response) => {
         dryRun,
       });
 
-      sendJson(response, result.ok ? 200 : 409, { account: runtime.account, ...result });
+      sendJson(response, result.ok ? 200 : 409, { account: publicAccount(runtime.account), ...result });
       return;
     }
 
