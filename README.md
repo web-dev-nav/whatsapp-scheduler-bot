@@ -195,6 +195,44 @@ curl -sS -X POST 'http://127.0.0.1:3000/api/patrol/trigger?account=main&dryRun=1
   -d '{"source":"install-test"}'
 ```
 
+## Patrol Trigger API
+
+This repo now exposes the patrol trigger endpoint used by the iPhone Shortcuts -> n8n flow in the automation PDF:
+
+```text
+POST /api/patrol/trigger?account=main
+```
+
+Dry run without sending a WhatsApp message:
+
+```text
+POST /api/patrol/trigger?account=main&dryRun=1
+```
+
+Optional `.env` token protection:
+
+```text
+PATROL_TRIGGER_TOKEN=your-secret
+```
+
+Then call:
+
+```text
+POST /api/patrol/trigger?account=main&token=your-secret
+```
+
+Example JSON body:
+
+```json
+{
+  "source": "n8n-iphone-shortcuts",
+  "guard": "Navjot",
+  "checkpointName": "North checkpoint"
+}
+```
+
+The configured message is sent immediately, and the trigger adds checkpoint and guard details at the bottom of the message when provided.
+
 ## Deploy To Laravel Forge
 
 This app deploys to Forge as a Node.js service behind Nginx, with Forge running `npm start` as a daemon.

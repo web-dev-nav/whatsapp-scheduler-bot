@@ -20,6 +20,7 @@ const {
 const HOST = process.env.HOST || '127.0.0.1';
 const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = path.resolve(process.env.DATA_DIR || __dirname);
+const PATROL_TRIGGER_TOKEN = (process.env.PATROL_TRIGGER_TOKEN || '').trim();
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const ACCOUNTS_PATH = path.resolve(process.env.ACCOUNTS_PATH || path.join(DATA_DIR, 'accounts.json'));
 const LEGACY_SEND_HISTORY_PATH = path.resolve(
@@ -873,6 +874,104 @@ function sendJson(response, statusCode, payload) {
   response.end(JSON.stringify(payload));
 }
 
+function sanitizeMessageLine(value) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function buildTriggeredPatrolMessage(config, payload) {
+  const baseMessage = sanitizeMessageLine(payload.message || config.message);
+  const checkpointName = sanitizeMessageLine(payload.checkpointName);
+  const guard = sanitizeMessageLine(payload.guard);
+
+  if (!checkpointName && !guard) {
+    return baseMessage;
+  }
+
+  const detailParts = [];
+
+  if (checkpointName) {
+    detailParts.push(`Checkpoint: ${checkpointName}`);
+  }
+
+  if (guard) {
+    detailParts.push(`Guard: ${guard}`);
+  }
+
+  return `${baseMessage}\n\n${detailParts.join('\n')}`;
+}
+
+function readPatrolTriggerToken(url, payload) {
+  return sanitizeMessageLine(url.searchParams.get('token') || payload.token);
+}
+
+async function triggerPatrolMessage(runtime, payload, options = {}) {
+  const config = loadConfigFromPath(runtime.paths.configPath);
+  const chat = await findTargetChat(runtime, config.groupName);
+
+  if (!chat) {
+    throw new Error(`Could not find chat "${config.groupName}".`);
+  }
+
+  const message = buildTriggeredPatrolMessage(config, payload);
+
+  if (!message) {
+    throw new Error('Patrol message is empty.');
+  }
+
+  const details = {
+    source: sanitizeMessageLine(payload.source) || 'api',
+    checkpointName: sanitizeMessageLine(payload.checkpointName) || null,
+    guard: sanitizeMessageLine(payload.guard) || null,
+    dryRun: Boolean(options.dryRun),
+  };
+
+  if (options.dryRun) {
+    addSchedulerLog(runtime, 'info', `Dry run patrol trigger prepared for "${chat.name}".`, details);
+    return {
+      dryRun: true,
+      chatId: chat.id._serialized,
+      chatName: chat.name,
+      message,
+      details,
+    };
+  }
+
+  addSchedulerLog(runtime, 'info', `Sending triggered patrol message to "${chat.name}".`, details);
+  const sentMessage = await chat.sendMessage(message);
+  const messageId = sentMessage?.id?._serialized || sentMessage?.id?.id || null;
+  appendSendHistory(
+    runtime,
+    {
+      key: `triggered|${new Date().toISOString()}|${chat.id._serialized}|${messageHash(message)}`,
+      status: 'sent',
+      triggered: true,
+      attemptedAt: new Date().toISOString(),
+      chatId: chat.id._serialized,
+      chatName: chat.name,
+      messageHash: messageHash(message),
+      source: details.source,
+      checkpointName: details.checkpointName,
+      guard: details.guard,
+      messageId,
+    }
+  );
+  addSchedulerLog(runtime, 'success', `Triggered patrol message sent to "${chat.name}".`, {
+    ...details,
+    messageId,
+  });
+
+  return {
+    dryRun: false,
+    chatId: chat.id._serialized,
+    chatName: chat.name,
+    message,
+    messageId,
+    details,
+  };
+}
+
 function readRequestBody(request) {
   return new Promise((resolve, reject) => {
     let body = '';
@@ -1131,6 +1230,39 @@ const server = http.createServer(async (request, response) => {
       const payload = JSON.parse(body);
       const config = normalizeConfig(payload.config);
       sendJson(response, 200, { config, preview: buildPreview(config) });
+      return;
+    }
+
+    if (request.method === 'POST' && pathname === '/api/patrol/trigger') {
+      const runtime = requireRuntime(response, accountFromUrl(url));
+      if (!runtime) return;
+
+      const body = await readRequestBody(request);
+      const payload = JSON.parse(body || '{}');
+      const providedToken = readPatrolTriggerToken(url, payload);
+
+      if (PATROL_TRIGGER_TOKEN && providedToken !== PATROL_TRIGGER_TOKEN) {
+        sendJson(response, 403, { error: 'Invalid patrol trigger token.' });
+        return;
+      }
+
+      if (runtime.state.status !== 'ready') {
+        sendJson(response, 409, {
+          error: 'WhatsApp is not ready.',
+          status: runtime.state.status,
+          account: runtime.account,
+        });
+        return;
+      }
+
+      const dryRun = ['1', 'true', 'yes'].includes(String(url.searchParams.get('dryRun') || '').toLowerCase());
+      const result = await triggerPatrolMessage(runtime, payload, { dryRun });
+      sendJson(response, 200, {
+        ok: true,
+        account: runtime.account,
+        status: runtime.state.status,
+        ...result,
+      });
       return;
     }
 

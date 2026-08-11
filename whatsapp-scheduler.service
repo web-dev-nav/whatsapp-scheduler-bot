@@ -1,0 +1,20 @@
+[Unit]
+Description=WhatsApp Patrol Scheduler
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=navjot
+Group=navjot
+WorkingDirectory=/home/navjot/Downloads/whatsapp-scheduler-bot
+Environment=HOME=/home/navjot
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/npm run ui
+Restart=always
+RestartSec=5
+StandardOutput=append:/home/navjot/.whatsapp-scheduler-bot/whatsapp-scheduler.log
+StandardError=append:/home/navjot/.whatsapp-scheduler-bot/whatsapp-scheduler.log
+
+[Install]
+WantedBy=multi-user.target
