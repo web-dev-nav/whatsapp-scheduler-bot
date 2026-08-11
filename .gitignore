@@ -9,3 +9,8 @@ latest-qr.png
 send-history.json
 
 accounts/
+.DS_Store
+**/.DS_Store
+*.xcuserstate
+xcuserdata/
+**/xcuserdata/
