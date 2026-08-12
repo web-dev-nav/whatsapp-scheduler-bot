@@ -21,12 +21,12 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
     @AppStorage("shiftIsActive") var shiftIsActive = false
 
     @Published var checkpoints: [Checkpoint] = []
-    @Published var appointments: [PatrolAppointment] = []
     @Published var history: [PatrolEvent] = []
     @Published var adminAccounts: [SchedulerAccount] = []
     @Published var whatsAppState: WhatsAppAdminState?
     @Published var patrolConfig: PatrolConfig?
     @Published var isConfigLoading = false
+    @Published var logs: [SchedulerLogEntry] = []
     @Published var currentLocation: CLLocation?
     @Published var locationAuthorization: CLAuthorizationStatus = .notDetermined
     @Published var isAdminLoading = false
@@ -45,7 +45,6 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         locationAuthorization = locationManager.authorizationStatus
 
         checkpoints = LocalJSONStore.load("watchpoint.checkpoints") ?? []
-        appointments = LocalJSONStore.load("watchpoint.appointments") ?? []
         history = LocalJSONStore.load("watchpoint.history") ?? []
         insideState = LocalJSONStore.load("watchpoint.insideState") ?? [:]
         lastSentAtByCheckpoint = LocalJSONStore.load("watchpoint.lastSentAtByCheckpoint") ?? [:]
@@ -115,9 +114,7 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
                 name: "Checkpoint \(next)",
                 latitude: latitude ?? currentLocation?.coordinate.latitude ?? 43.1394,
                 longitude: longitude ?? currentLocation?.coordinate.longitude ?? -80.2644,
-                radiusMeters: 100,
-                notes: "",
-                isActive: true
+                radiusMeters: 100
             )
         )
         saveCheckpoints()
@@ -133,29 +130,6 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     func saveCheckpoints() {
         LocalJSONStore.save(checkpoints, "watchpoint.checkpoints")
-    }
-
-    func addAppointment() {
-        let start = Date()
-        appointments.append(
-            PatrolAppointment(
-                id: UUID(),
-                title: "Patrol Shift",
-                startsAt: start,
-                endsAt: Calendar.current.date(byAdding: .hour, value: 8, to: start) ?? start,
-                isActive: true
-            )
-        )
-        saveAppointments()
-    }
-
-    func deleteAppointment(_ appointment: PatrolAppointment) {
-        appointments.removeAll { $0.id == appointment.id }
-        saveAppointments()
-    }
-
-    func saveAppointments() {
-        LocalJSONStore.save(appointments, "watchpoint.appointments")
     }
 
     func manualTrigger(_ checkpoint: Checkpoint) async {
@@ -262,6 +236,15 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
+    func fetchLogs() async {
+        guard let api = adminAPI else { return }
+        do {
+            logs = try await api.logs()
+        } catch {
+            // Activity log is a nice-to-have; don't surface an alert for it.
+        }
+    }
+
     func logoutWhatsApp() async {
         guard let api = adminAPI else {
             alertMessage = "Scheduler admin URL is invalid."
@@ -290,7 +273,7 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
             return
         }
 
-        for checkpoint in checkpoints where checkpoint.isActive {
+        for checkpoint in checkpoints {
             let checkpointLocation = CLLocation(latitude: checkpoint.latitude, longitude: checkpoint.longitude)
             let isInside = location.distance(from: checkpointLocation) <= checkpoint.radiusMeters
             let wasInside = insideState[checkpoint.id] ?? false

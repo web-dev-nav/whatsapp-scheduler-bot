@@ -10,10 +10,12 @@ import MapKit
 import SwiftUI
 import UIKit
 
+// Three tabs, matching the browser's two pages (Scheduler dashboard,
+// GPS Patrol Mode) plus a Settings tab for device-only knobs that have
+// no equivalent in the browser (geofence tuning, the n8n webhook URL).
 struct ContentView: View {
     @StateObject private var appState = AppState()
     @State private var adminPassword = ""
-    @State private var selectedCheckpointId: String?
     @State private var mapPosition: MapCameraPosition = .region(
         MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: 43.1394, longitude: -80.2644),
@@ -23,16 +25,10 @@ struct ContentView: View {
 
     var body: some View {
         TabView {
+            schedulerView
+                .tabItem { Label("Scheduler", systemImage: "paperplane.circle") }
             patrolView
                 .tabItem { Label("Patrol", systemImage: "shield.lefthalf.filled") }
-            checkpointsView
-                .tabItem { Label("Checkpoints", systemImage: "map") }
-            historyView
-                .tabItem { Label("History", systemImage: "clock.arrow.circlepath") }
-            connectWhatsAppView
-                .tabItem { Label("Connect", systemImage: "qrcode.viewfinder") }
-            scheduleView
-                .tabItem { Label("Schedule", systemImage: "calendar") }
             settingsView
                 .tabItem { Label("Settings", systemImage: "gearshape") }
         }
@@ -50,448 +46,209 @@ struct ContentView: View {
         )
     }
 
-    private var selectedCheckpoint: Checkpoint? {
-        if let selectedCheckpointId,
-           let selected = appState.checkpoints.first(where: { $0.id == selectedCheckpointId }) {
-            return selected
-        }
-        return appState.checkpoints.first
-    }
+    // MARK: - Scheduler
+    // Mirrors the browser's single page: connect WhatsApp (QR), then pick
+    // the chat, write the message, and set the schedule -- all in one flow.
 
-    private var patrolView: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    VStack(alignment: .leading, spacing: 14) {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(appState.shiftIsActive ? "Patrol Active" : "Patrol Stopped")
-                                    .font(.title2.weight(.semibold))
-                                Text(appState.shiftIsActive ? "Detecting checkpoint arrivals." : "Start patrol to enable location detection.")
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Image(systemName: appState.shiftIsActive ? "location.fill" : "location.slash")
-                                .font(.title)
-                                .foregroundStyle(appState.shiftIsActive ? .green : .secondary)
-                        }
-
-                        LabeledContent("Location Access", value: authorizationLabel(appState.locationAuthorization))
-                        if let location = appState.currentLocation {
-                            LabeledContent("GPS Accuracy", value: "\(Int(location.horizontalAccuracy)) m")
-                        }
-                        if let nearest = appState.nearestCheckpoint {
-                            LabeledContent("Nearest", value: nearest.checkpoint.name)
-                            LabeledContent("Distance", value: "\(Int(nearest.distance)) m")
-                        }
-
-                        Button {
-                            appState.shiftIsActive ? appState.stopPatrol() : appState.startPatrol()
-                        } label: {
-                            Label(appState.shiftIsActive ? "Stop Patrol" : "Start Patrol", systemImage: appState.shiftIsActive ? "stop.fill" : "play.fill")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                        .tint(appState.shiftIsActive ? .red : .green)
-                    }
-                    .panel()
-
-                    VStack(alignment: .leading, spacing: 12) {
-                        Label("Manual Trigger", systemImage: "paperplane.fill")
-                            .font(.headline)
-
-                        if appState.checkpoints.isEmpty {
-                            ContentUnavailableView("No Checkpoints", systemImage: "mappin.slash", description: Text("Add checkpoints before sending."))
-                        } else {
-                            Picker("Checkpoint", selection: checkpointSelection) {
-                                ForEach(appState.checkpoints) { checkpoint in
-                                    Text(checkpoint.name).tag(Optional(checkpoint.id))
-                                }
-                            }
-                            .pickerStyle(.menu)
-
-                            Button {
-                                guard let selectedCheckpoint else { return }
-                                Task { await appState.manualTrigger(selectedCheckpoint) }
-                            } label: {
-                                Label("Send Arrival", systemImage: "location.fill")
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.large)
-                        }
-                    }
-                    .panel()
-
-                    VStack(alignment: .leading, spacing: 12) {
-                        Label("Last Event", systemImage: "list.bullet.rectangle")
-                            .font(.headline)
-                        if let event = appState.history.first {
-                            EventRow(event: event)
-                        } else {
-                            Text("No patrol events yet.")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .panel()
-                }
-                .padding()
-            }
-            .background(Color(.systemGroupedBackground))
-            .navigationTitle("Patrol")
-            .task {
-                await appState.retryQueuedEvents()
-            }
-        }
-    }
-
-    private var checkpointsView: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                MapReader { proxy in
-                    Map(position: $mapPosition) {
-                        UserAnnotation()
-                        ForEach(appState.checkpoints) { checkpoint in
-                            Marker(checkpoint.name, coordinate: CLLocationCoordinate2D(latitude: checkpoint.latitude, longitude: checkpoint.longitude))
-                                .tint(checkpoint.isActive ? .green : .gray)
-                            MapCircle(center: CLLocationCoordinate2D(latitude: checkpoint.latitude, longitude: checkpoint.longitude), radius: checkpoint.radiusMeters)
-                                .foregroundStyle(.green.opacity(0.18))
-                                .stroke(.green, lineWidth: 2)
-                        }
-                    }
-                    .mapControls {
-                        MapUserLocationButton()
-                        MapCompass()
-                        MapScaleView()
-                    }
-                    .onTapGesture { point in
-                        if let coordinate = proxy.convert(point, from: .local) {
-                            appState.addCheckpoint(latitude: coordinate.latitude, longitude: coordinate.longitude)
-                        }
-                    }
-                }
-                .frame(minHeight: 330)
-
-                List {
-                    Section("Checkpoints") {
-                        ForEach($appState.checkpoints) { $checkpoint in
-                            VStack(alignment: .leading, spacing: 10) {
-                                Toggle("Active", isOn: $checkpoint.isActive)
-                                TextField("Name", text: $checkpoint.name)
-                                TextField("Checkpoint ID", text: $checkpoint.id)
-                                    .textInputAutocapitalization(.never)
-                                HStack {
-                                    TextField("Latitude", value: $checkpoint.latitude, format: .number)
-                                        .keyboardType(.decimalPad)
-                                    TextField("Longitude", value: $checkpoint.longitude, format: .number)
-                                        .keyboardType(.decimalPad)
-                                }
-                                Stepper("Radius \(Int(checkpoint.radiusMeters)) m", value: $checkpoint.radiusMeters, in: 10...1000, step: 10)
-                                TextField("Notes", text: $checkpoint.notes, axis: .vertical)
-                            }
-                            .padding(.vertical, 6)
-                        }
-                        .onDelete { offsets in
-                            for index in offsets {
-                                appState.deleteCheckpoint(appState.checkpoints[index])
-                            }
-                        }
-
-                        if appState.checkpoints.isEmpty {
-                            Text("Tap the map to create a checkpoint.")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            }
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) { EditButton() }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        appState.addCheckpoint()
-                    } label: {
-                        Label("Use Location", systemImage: "location")
-                    }
-                }
-            }
-            .onAppear {
-                appState.requestLocationAccess()
-                if let location = appState.currentLocation {
-                    mapPosition = .region(
-                        MKCoordinateRegion(
-                            center: location.coordinate,
-                            span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
-                        )
-                    )
-                }
-            }
-            .onDisappear { appState.saveCheckpoints() }
-            .navigationTitle("Checkpoints")
-        }
-    }
-
-    private var historyView: some View {
-        NavigationStack {
-            List {
-                ForEach(appState.history) { event in
-                    VStack(alignment: .leading, spacing: 8) {
-                        EventRow(event: event)
-                        HStack {
-                            Label(event.webhookReceived ? "Webhook received" : "Webhook pending", systemImage: event.webhookReceived ? "checkmark.circle" : "clock")
-                            Spacer()
-                            if let responseCode = event.responseCode {
-                                Text("HTTP \(responseCode)")
-                            }
-                            if let schedulerStatusCode = event.schedulerStatusCode {
-                                Text("Scheduler \(schedulerStatusCode)")
-                            }
-                        }
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                        if let summary = event.responseSummary {
-                            Text(summary)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        if let reason = event.schedulerReason {
-                            Text(reason)
-                                .font(.caption)
-                                .foregroundStyle(.orange)
-                        }
-                    }
-                    .padding(.vertical, 6)
-                }
-            }
-            .overlay {
-                if appState.history.isEmpty {
-                    ContentUnavailableView("No History", systemImage: "clock", description: Text("Queued, sent, and failed events appear here."))
-                }
-            }
-            .toolbar {
-                Button {
-                    Task { await appState.retryQueuedEvents() }
-                } label: {
-                    Label("Retry Queue", systemImage: "arrow.clockwise")
-                }
-            }
-            .navigationTitle("History")
-        }
-    }
-
-    private var connectWhatsAppView: some View {
+    private var schedulerView: some View {
         NavigationStack {
             Form {
-                Section("Scheduler Admin") {
-                    TextField("Admin base URL", text: $appState.schedulerAdminBaseURL)
-                        .keyboardType(.URL)
-                        .textInputAutocapitalization(.never)
-                    Picker("Account", selection: $appState.selectedAdminAccountId) {
-                        if appState.adminAccounts.isEmpty {
-                            Text("main").tag("main")
-                        }
-                        ForEach(appState.adminAccounts) { account in
-                            Text(account.name).tag(account.id)
-                        }
-                    }
-                    SecureField("Account password", text: $adminPassword)
-                    Button {
-                        Task { await appState.loginAdmin(password: adminPassword) }
-                    } label: {
-                        Label("Connect Account", systemImage: "lock.open")
-                    }
-                    .disabled(adminPassword.count < 4 || appState.isAdminLoading)
+                connectionSection
+
+                if let config = Binding($appState.patrolConfig), appState.whatsAppState?.status == "ready" {
+                    groupSection(config: config)
+                    messageSection(config: config)
+                    scheduleSection(config: config)
+                    saveScheduleSection
                 }
 
-                Section("WhatsApp Engine") {
-                    WhatsAppConnectionRow(state: appState.whatsAppState)
-
-                    if let qrDataUrl = appState.whatsAppState?.qrDataUrl,
-                       let image = UIImage(dataURL: qrDataUrl) {
-                        VStack(spacing: 12) {
-                            Image(uiImage: image)
-                                .interpolation(.none)
-                                .resizable()
-                                .scaledToFit()
-                                .frame(maxWidth: 280)
-                                .frame(maxWidth: .infinity)
-
-                            Text("Open WhatsApp > Settings > Linked Devices > Link a Device, then scan this QR.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    Button {
-                        Task { await appState.refreshWhatsAppStatus() }
-                    } label: {
-                        Label("Refresh Status", systemImage: "arrow.clockwise")
-                    }
-                    .disabled(appState.isAdminLoading || appState.adminToken.isEmpty)
-
-                    Button(role: .destructive) {
-                        Task { await appState.logoutWhatsApp() }
-                    } label: {
-                        Label("Logout Session", systemImage: "rectangle.portrait.and.arrow.right")
-                    }
-                    .disabled(appState.isAdminLoading || appState.adminToken.isEmpty)
-
-                    if let state = appState.whatsAppState {
-                        LabeledContent("Chats loaded", value: "\(state.chats.count)")
-                        if let error = state.error, !error.isEmpty {
-                            Text(error)
-                                .font(.footnote)
-                                .foregroundStyle(.red)
-                        }
-                    }
+                if !appState.logs.isEmpty {
+                    activitySection
                 }
             }
+            .navigationTitle("Scheduler")
+            .refreshable { await refreshSchedulerScreen() }
             .task {
                 await appState.fetchAdminAccounts()
                 if !appState.adminToken.isEmpty {
-                    await appState.refreshWhatsAppStatus()
-                }
-                while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(4))
-                    guard !Task.isCancelled, !appState.adminToken.isEmpty else { continue }
-                    await appState.refreshWhatsAppStatus()
-                    if appState.whatsAppState?.status == "ready" {
-                        break
-                    }
+                    await refreshSchedulerScreen()
                 }
             }
-            .navigationTitle("Connect WhatsApp")
         }
     }
 
-    private var scheduleView: some View {
-        NavigationStack {
-            Group {
-                if let config = Binding($appState.patrolConfig) {
-                    Form {
-                        Section("WhatsApp Group") {
-                            if appState.whatsAppState?.chats.isEmpty ?? true {
-                                Text("Open Connect and refresh status to load chats.")
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                Picker("Target chat", selection: config.groupName) {
-                                    ForEach(appState.whatsAppState?.chats ?? []) { chat in
-                                        Text(chat.name).tag(chat.name)
-                                    }
-                                }
-                                .pickerStyle(.menu)
-                            }
-                        }
-
-                        Section("Message") {
-                            TextEditor(text: config.message)
-                                .frame(minHeight: 120)
-                        }
-
-                        Section("Schedule") {
-                            Toggle("Automatic sending", isOn: config.schedule.enabled)
-                        }
-
-                        Section("Weekly Shift Start Days") {
-                            weekdayToggleRow(config: config)
-                        }
-
-                        Section("Shift Window") {
-                            HStack {
-                                Button("Day (8:00–20:00)") {
-                                    config.schedule.shiftStartHour.wrappedValue = 8
-                                    config.schedule.shiftEndHour.wrappedValue = 20
-                                }
-                                Spacer()
-                                Button("Night (20:00–8:00)") {
-                                    config.schedule.shiftStartHour.wrappedValue = 20
-                                    config.schedule.shiftEndHour.wrappedValue = 8
-                                }
-                            }
-                            .buttonStyle(.bordered)
-
-                            Stepper(
-                                "Starts at \(config.schedule.shiftStartHour.wrappedValue):00",
-                                value: config.schedule.shiftStartHour,
-                                in: 0...23
-                            )
-                            Stepper(
-                                "Ends at \(config.schedule.shiftEndHour.wrappedValue):00",
-                                value: config.schedule.shiftEndHour,
-                                in: 0...23
-                            )
-                        }
-
-                        Section("First Message Window") {
-                            Stepper(
-                                "Earliest: \(config.schedule.firstSendMinuteMin.wrappedValue) min after start",
-                                value: config.schedule.firstSendMinuteMin,
-                                in: 0...59
-                            )
-                            Stepper(
-                                "Latest: \(config.schedule.firstSendMinuteMax.wrappedValue) min after start",
-                                value: config.schedule.firstSendMinuteMax,
-                                in: 0...59
-                            )
-                        }
-
-                        Section("Gap Between Messages") {
-                            Stepper(
-                                "Shortest: \(config.schedule.minSendIntervalMinutes.wrappedValue) min",
-                                value: config.schedule.minSendIntervalMinutes,
-                                in: 75...240,
-                                step: 5
-                            )
-                            Stepper(
-                                "Longest: \(config.schedule.maxSendIntervalMinutes.wrappedValue) min",
-                                value: config.schedule.maxSendIntervalMinutes,
-                                in: 75...240,
-                                step: 5
-                            )
-                        }
-
-                        Section("One-Time Shift Dates") {
-                            oneTimeDatesEditor(config: config)
-                        }
-
-                        Section {
-                            Button {
-                                Task { await appState.saveConfig() }
-                            } label: {
-                                Label("Save Schedule", systemImage: "checkmark.circle")
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.large)
-                            .disabled(appState.isConfigLoading)
-                        }
-                    }
-                } else if appState.isConfigLoading {
-                    ProgressView("Loading schedule…")
-                } else {
-                    ContentUnavailableView(
-                        "No Schedule Loaded",
-                        systemImage: "calendar.badge.exclamationmark",
-                        description: Text("Connect an account first, then pull to refresh.")
-                    )
+    private var connectionSection: some View {
+        Section("WhatsApp Account") {
+            Picker("Account", selection: $appState.selectedAdminAccountId) {
+                if appState.adminAccounts.isEmpty {
+                    Text("main").tag("main")
+                }
+                ForEach(appState.adminAccounts) { account in
+                    Text(account.name).tag(account.id)
                 }
             }
-            .navigationTitle("Schedule")
-            .toolbar {
+
+            WhatsAppConnectionRow(state: appState.whatsAppState)
+
+            if appState.adminToken.isEmpty {
+                SecureField("Account password", text: $adminPassword)
                 Button {
-                    Task { await appState.fetchConfig() }
+                    Task {
+                        await appState.loginAdmin(password: adminPassword)
+                        await refreshSchedulerScreen()
+                    }
                 } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
+                    Label("Connect", systemImage: "lock.open")
                 }
-                .disabled(appState.adminToken.isEmpty)
-            }
-            .task {
-                if appState.patrolConfig == nil, !appState.adminToken.isEmpty {
-                    await appState.fetchConfig()
+                .disabled(adminPassword.count < 4 || appState.isAdminLoading)
+            } else {
+                if let qrDataUrl = appState.whatsAppState?.qrDataUrl,
+                   let image = UIImage(dataURL: qrDataUrl) {
+                    VStack(spacing: 12) {
+                        Image(uiImage: image)
+                            .interpolation(.none)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: 280)
+                            .frame(maxWidth: .infinity)
+                        Text("Open WhatsApp > Settings > Linked Devices > Link a Device, then scan this QR.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Button(role: .destructive) {
+                    Task { await appState.logoutWhatsApp() }
+                } label: {
+                    Label("Log Out This Account", systemImage: "rectangle.portrait.and.arrow.right")
+                }
+                .disabled(appState.isAdminLoading)
+
+                if let error = appState.whatsAppState?.error, !error.isEmpty {
+                    Text(error)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
                 }
             }
         }
+    }
+
+    private func groupSection(config: Binding<PatrolConfig>) -> some View {
+        Section("Who Gets The Messages") {
+            if appState.whatsAppState?.chats.isEmpty ?? true {
+                Text("No chats loaded yet. Pull to refresh once WhatsApp is ready.")
+                    .foregroundStyle(.secondary)
+            } else {
+                Picker("WhatsApp group or chat", selection: config.groupName) {
+                    ForEach(appState.whatsAppState?.chats ?? []) { chat in
+                        Text(chat.name).tag(chat.name)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
+        }
+    }
+
+    private func messageSection(config: Binding<PatrolConfig>) -> some View {
+        Section("Message") {
+            TextEditor(text: config.message)
+                .frame(minHeight: 100)
+        }
+    }
+
+    private func scheduleSection(config: Binding<PatrolConfig>) -> some View {
+        Group {
+            Section("Schedule") {
+                Toggle("Automatic sending", isOn: config.schedule.enabled)
+                weekdayToggleRow(config: config)
+            }
+
+            Section("Shift") {
+                HStack {
+                    Button("Day (8:00–20:00)") {
+                        config.schedule.shiftStartHour.wrappedValue = 8
+                        config.schedule.shiftEndHour.wrappedValue = 20
+                    }
+                    Spacer()
+                    Button("Night (20:00–8:00)") {
+                        config.schedule.shiftStartHour.wrappedValue = 20
+                        config.schedule.shiftEndHour.wrappedValue = 8
+                    }
+                }
+                .buttonStyle(.bordered)
+                .font(.subheadline)
+            }
+
+            DisclosureGroup("Fine-Tune Timing") {
+                Stepper(
+                    "Shift starts \(config.schedule.shiftStartHour.wrappedValue):00",
+                    value: config.schedule.shiftStartHour,
+                    in: 0...23
+                )
+                Stepper(
+                    "Shift ends \(config.schedule.shiftEndHour.wrappedValue):00",
+                    value: config.schedule.shiftEndHour,
+                    in: 0...23
+                )
+                Stepper(
+                    "First message earliest: \(config.schedule.firstSendMinuteMin.wrappedValue) min",
+                    value: config.schedule.firstSendMinuteMin,
+                    in: 0...59
+                )
+                Stepper(
+                    "First message latest: \(config.schedule.firstSendMinuteMax.wrappedValue) min",
+                    value: config.schedule.firstSendMinuteMax,
+                    in: 0...59
+                )
+                Stepper(
+                    "Shortest gap: \(config.schedule.minSendIntervalMinutes.wrappedValue) min",
+                    value: config.schedule.minSendIntervalMinutes,
+                    in: 75...240,
+                    step: 5
+                )
+                Stepper(
+                    "Longest gap: \(config.schedule.maxSendIntervalMinutes.wrappedValue) min",
+                    value: config.schedule.maxSendIntervalMinutes,
+                    in: 75...240,
+                    step: 5
+                )
+                oneTimeDatesEditor(config: config)
+            }
+        }
+    }
+
+    private var saveScheduleSection: some View {
+        Section {
+            Button {
+                Task { await appState.saveConfig() }
+            } label: {
+                Label("Save Setup", systemImage: "checkmark.circle")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(appState.isConfigLoading)
+        }
+    }
+
+    private var activitySection: some View {
+        Section("Activity") {
+            ForEach(appState.logs.prefix(8)) { log in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(log.message)
+                        .font(.subheadline)
+                    Text(log.label)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func refreshSchedulerScreen() async {
+        await appState.refreshWhatsAppStatus()
+        await appState.fetchConfig()
+        await appState.fetchLogs()
     }
 
     private func weekdayToggleRow(config: Binding<PatrolConfig>) -> some View {
@@ -532,7 +289,7 @@ struct ContentView: View {
                     config.schedule.extraShiftDates.wrappedValue.sort()
                 }
             } label: {
-                Label("Add Today", systemImage: "plus")
+                Label("Add One-Time Date (Today)", systemImage: "plus")
             }
         }
     }
@@ -544,12 +301,198 @@ struct ContentView: View {
         return formatter.string(from: date)
     }
 
+    // MARK: - Patrol
+    // Mirrors patrol.html: mark checkpoints on the map, start live patrol,
+    // and an arrival at a checkpoint sends the configured message.
+
+    private var patrolView: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    patrolStatusPanel
+                    checkpointMapPanel
+                    checkpointListPanel
+                    recentActivityPanel
+                }
+                .padding()
+            }
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("Patrol")
+            .onAppear { appState.requestLocationAccess() }
+            .onDisappear { appState.saveCheckpoints() }
+            .task { await appState.retryQueuedEvents() }
+        }
+    }
+
+    private var patrolStatusPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(appState.shiftIsActive ? "Patrol Active" : "Patrol Stopped")
+                        .font(.title2.weight(.semibold))
+                    Text(appState.shiftIsActive ? "Detecting checkpoint arrivals." : "Mark checkpoints below, then start.")
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: appState.shiftIsActive ? "location.fill" : "location.slash")
+                    .font(.title)
+                    .foregroundStyle(appState.shiftIsActive ? .green : .secondary)
+            }
+
+            LabeledContent("Location Access", value: authorizationLabel(appState.locationAuthorization))
+            if let location = appState.currentLocation {
+                LabeledContent("GPS Accuracy", value: "\(Int(location.horizontalAccuracy)) m")
+            }
+            if let nearest = appState.nearestCheckpoint {
+                LabeledContent("Nearest", value: nearest.checkpoint.name)
+                LabeledContent("Distance", value: "\(Int(nearest.distance)) m")
+            }
+
+            Button {
+                appState.shiftIsActive ? appState.stopPatrol() : appState.startPatrol()
+            } label: {
+                Label(appState.shiftIsActive ? "Stop Patrol" : "Start Live Patrol", systemImage: appState.shiftIsActive ? "stop.fill" : "play.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .tint(appState.shiftIsActive ? .red : .green)
+            .disabled(appState.checkpoints.isEmpty)
+
+            if appState.checkpoints.isEmpty {
+                Label("Add at least one checkpoint below before starting.", systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
+        .panel()
+    }
+
+    private var checkpointMapPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Checkpoints", systemImage: "map")
+                .font(.headline)
+            Text("Tap the map to drop a checkpoint. When you enter its circle during a live patrol, the message from the Scheduler tab is sent.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            MapReader { proxy in
+                Map(position: $mapPosition) {
+                    UserAnnotation()
+                    ForEach(appState.checkpoints) { checkpoint in
+                        Marker(checkpoint.name, coordinate: CLLocationCoordinate2D(latitude: checkpoint.latitude, longitude: checkpoint.longitude))
+                            .tint(.green)
+                        MapCircle(center: CLLocationCoordinate2D(latitude: checkpoint.latitude, longitude: checkpoint.longitude), radius: checkpoint.radiusMeters)
+                            .foregroundStyle(.green.opacity(0.18))
+                            .stroke(.green, lineWidth: 2)
+                    }
+                }
+                .mapControls {
+                    MapUserLocationButton()
+                    MapCompass()
+                }
+                .onTapGesture { point in
+                    if let coordinate = proxy.convert(point, from: .local) {
+                        appState.addCheckpoint(latitude: coordinate.latitude, longitude: coordinate.longitude)
+                    }
+                }
+            }
+            .frame(height: 260)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            Button {
+                appState.addCheckpoint()
+            } label: {
+                Label("Drop At My Location", systemImage: "location")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+        }
+        .panel()
+    }
+
+    private var checkpointListPanel: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if appState.checkpoints.isEmpty {
+                Text("No checkpoints yet — tap the map above.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(Array($appState.checkpoints.enumerated()), id: \.element.id) { index, $checkpoint in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            TextField("Name", text: $checkpoint.name)
+                                .font(.subheadline.weight(.semibold))
+                            Spacer()
+                            Button(role: .destructive) {
+                                appState.deleteCheckpoint(checkpoint)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                        }
+                        Stepper("Radius \(Int(checkpoint.radiusMeters)) m", value: $checkpoint.radiusMeters, in: 10...1000, step: 10)
+                    }
+                    .padding(.vertical, 6)
+                    if index < appState.checkpoints.count - 1 {
+                        Divider()
+                    }
+                }
+            }
+        }
+        .panel()
+    }
+
+    private var recentActivityPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("Recent Arrivals", systemImage: "list.bullet.rectangle")
+                    .font(.headline)
+                Spacer()
+                if appState.isRetrying {
+                    ProgressView()
+                } else {
+                    Button {
+                        Task { await appState.retryQueuedEvents() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                }
+            }
+
+            if appState.history.isEmpty {
+                Text("No patrol events yet.")
+                    .foregroundStyle(.secondary)
+            } else {
+                let recent = Array(appState.history.prefix(5))
+                ForEach(Array(recent.enumerated()), id: \.element.id) { index, event in
+                    EventRow(event: event)
+                    if index < recent.count - 1 {
+                        Divider()
+                    }
+                }
+            }
+        }
+        .panel()
+    }
+
+    // MARK: - Settings
+    // Device-only knobs with no equivalent in the browser: geofence
+    // tuning, and where this device sends admin/patrol requests.
+
     private var settingsView: some View {
         NavigationStack {
             Form {
                 Section("Guard") {
                     TextField("Guard name", text: $appState.guardName)
                         .textInputAutocapitalization(.never)
+                }
+
+                Section("Scheduler Admin") {
+                    TextField("Admin base URL", text: $appState.schedulerAdminBaseURL)
+                        .keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                    Text("The engine's admin API, used for login, QR, and schedule editing.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("Patrol Send API") {
@@ -568,38 +511,9 @@ struct ContentView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-
-                Section("Appointments") {
-                    ForEach($appState.appointments) { $appointment in
-                        VStack(alignment: .leading, spacing: 8) {
-                            Toggle("Use this shift", isOn: $appointment.isActive)
-                            TextField("Shift title", text: $appointment.title)
-                            DatePicker("Starts", selection: $appointment.startsAt)
-                            DatePicker("Ends", selection: $appointment.endsAt)
-                        }
-                    }
-                    .onDelete { offsets in
-                        for index in offsets {
-                            appState.deleteAppointment(appState.appointments[index])
-                        }
-                    }
-                    Button {
-                        appState.addAppointment()
-                    } label: {
-                        Label("Add Shift Appointment", systemImage: "plus")
-                    }
-                }
             }
-            .onDisappear { appState.saveAppointments() }
             .navigationTitle("Settings")
         }
-    }
-
-    private var checkpointSelection: Binding<String?> {
-        Binding(
-            get: { selectedCheckpoint?.id },
-            set: { selectedCheckpointId = $0 }
-        )
     }
 
     private func authorizationLabel(_ status: CLAuthorizationStatus) -> String {

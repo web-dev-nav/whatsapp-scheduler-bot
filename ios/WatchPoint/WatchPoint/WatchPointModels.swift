@@ -14,22 +14,16 @@ struct GuardProfile: Codable, Hashable {
     var name: String
 }
 
+// Mirrors the browser's checkpoint shape (public/patrol.js): name,
+// location, radius -- nothing else. No active/inactive toggle; a
+// checkpoint being in the list is what makes it active, same as the
+// browser.
 struct Checkpoint: Codable, Identifiable, Hashable {
     var id: String
     var name: String
     var latitude: Double
     var longitude: Double
     var radiusMeters: Double
-    var notes: String
-    var isActive: Bool
-}
-
-struct PatrolAppointment: Codable, Identifiable, Hashable {
-    var id: UUID
-    var title: String
-    var startsAt: Date
-    var endsAt: Date
-    var isActive: Bool
 }
 
 struct PatrolEvent: Codable, Identifiable, Hashable {
@@ -188,6 +182,18 @@ struct ConfigResponse: Decodable {
 
 struct ConfigUpdateRequest: Encodable {
     let config: PatrolConfig
+}
+
+struct SchedulerLogEntry: Decodable, Identifiable, Hashable {
+    let id: String
+    let type: String
+    let message: String
+    let timestamp: String
+    let label: String
+}
+
+struct LogsResponse: Decodable {
+    let logs: [SchedulerLogEntry]
 }
 
 let weekdayLabels: [(value: Int, short: String)] = [

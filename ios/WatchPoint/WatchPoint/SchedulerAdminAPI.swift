@@ -85,6 +85,11 @@ struct SchedulerAdminAPI {
         try await request(path: "/api/config", query: ["account": accountId], authorized: true)
     }
 
+    func logs() async throws -> [SchedulerLogEntry] {
+        let response: LogsResponse = try await request(path: "/api/logs", query: ["account": accountId], authorized: true)
+        return response.logs
+    }
+
     func updateConfig(_ config: PatrolConfig) async throws -> ConfigResponse {
         try await request(
             path: "/api/config",
