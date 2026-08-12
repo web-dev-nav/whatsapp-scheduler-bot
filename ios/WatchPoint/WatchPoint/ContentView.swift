@@ -10,25 +10,24 @@ import MapKit
 import SwiftUI
 import UIKit
 
-// Three tabs, matching the browser's two pages (Scheduler dashboard,
-// GPS Patrol Mode) plus a Settings tab for device-only knobs that have
-// no equivalent in the browser (geofence tuning, the n8n webhook URL).
+// Five focused screens instead of one crowded form: Connect (WhatsApp
+// sessions), Setup (a step-by-step wizard for the message/schedule,
+// matching the browser's 5-step flow), Patrol (GPS checkpoints + live
+// patrol), Activity (scheduler log + patrol events), Settings
+// (device-only knobs with no browser equivalent).
 struct ContentView: View {
     @StateObject private var appState = AppState()
-    @State private var adminPassword = ""
-    @State private var mapPosition: MapCameraPosition = .region(
-        MKCoordinateRegion(
-            center: CLLocationCoordinate2D(latitude: 43.1394, longitude: -80.2644),
-            span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
-        )
-    )
 
     var body: some View {
         TabView {
-            schedulerView
-                .tabItem { Label("Scheduler", systemImage: "paperplane.circle") }
+            connectView
+                .tabItem { Label("Connect", systemImage: "qrcode.viewfinder") }
+            setupView
+                .tabItem { Label("Setup", systemImage: "list.number") }
             patrolView
                 .tabItem { Label("Patrol", systemImage: "shield.lefthalf.filled") }
+            activityView
+                .tabItem { Label("Activity", systemImage: "clock.arrow.circlepath") }
             settingsView
                 .tabItem { Label("Settings", systemImage: "gearshape") }
         }
@@ -45,98 +44,315 @@ struct ContentView: View {
             set: { if !$0 { appState.alertMessage = nil } }
         )
     }
+}
 
-    // MARK: - Scheduler
-    // Mirrors the browser's single page: connect WhatsApp (QR), then pick
-    // the chat, write the message, and set the schedule -- all in one flow.
+// MARK: - Connect (WhatsApp session management)
 
-    private var schedulerView: some View {
+private struct ConnectTab: View {
+    @ObservedObject var appState: AppState
+    @State private var adminPassword = ""
+    @State private var showAddAccount = false
+    @State private var showDeleteConfirm = false
+
+    var body: some View {
         NavigationStack {
-            Form {
-                connectionSection
-
-                if let config = Binding($appState.patrolConfig), appState.whatsAppState?.status == "ready" {
-                    groupSection(config: config)
-                    messageSection(config: config)
-                    scheduleSection(config: config)
-                    saveScheduleSection
+            List {
+                accountsSection
+                selectedSessionSection
+            }
+            .navigationTitle("Connect")
+            .keyboardDoneButton()
+            .scrollDismissesKeyboard(.interactively)
+            .confirmationDialog(
+                "Remove this account?",
+                isPresented: $showDeleteConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Remove", role: .destructive) {
+                    Task { await appState.deleteSelectedAccount() }
                 }
-
-                if !appState.logs.isEmpty {
-                    activitySection
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This deletes the saved WhatsApp session and schedule for this account. This can't be undone.")
+            }
+            .sheet(isPresented: $showAddAccount) {
+                AddAccountSheet { name, password in
+                    Task { await appState.createAccount(name: name, password: password) }
                 }
             }
-            .navigationTitle("Scheduler")
-            .refreshable { await refreshSchedulerScreen() }
             .task {
                 await appState.fetchAdminAccounts()
                 if !appState.adminToken.isEmpty {
-                    await refreshSchedulerScreen()
+                    await appState.refreshWhatsAppStatus()
                 }
             }
         }
     }
 
-    private var connectionSection: some View {
-        Section("WhatsApp Account") {
-            Picker("Account", selection: $appState.selectedAdminAccountId) {
-                if appState.adminAccounts.isEmpty {
-                    Text("main").tag("main")
-                }
-                ForEach(appState.adminAccounts) { account in
-                    Text(account.name).tag(account.id)
-                }
+    private var accountsSection: some View {
+        Section("WhatsApp Sessions") {
+            ForEach(appState.adminAccounts) { account in
+                accountRow(account)
             }
 
+            Button {
+                showAddAccount = true
+            } label: {
+                Label("Add Session", systemImage: "plus.circle")
+            }
+        }
+    }
+
+    private func accountRow(_ account: SchedulerAccount) -> some View {
+        Button {
+            guard account.id != appState.selectedAdminAccountId else { return }
+            Task { await appState.selectAccount(account.id) }
+        } label: {
+            HStack {
+                Text(account.name)
+                    .foregroundStyle(.primary)
+                Spacer()
+                if account.id == appState.selectedAdminAccountId {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+        }
+    }
+
+    private var selectedSessionSection: some View {
+        Section("Selected Session") {
             WhatsAppConnectionRow(state: appState.whatsAppState)
 
             if appState.adminToken.isEmpty {
-                SecureField("Account password", text: $adminPassword)
-                Button {
-                    Task {
-                        await appState.loginAdmin(password: adminPassword)
-                        await refreshSchedulerScreen()
-                    }
-                } label: {
-                    Label("Connect", systemImage: "lock.open")
-                }
-                .disabled(adminPassword.count < 4 || appState.isAdminLoading)
+                loginFields
             } else {
-                if let qrDataUrl = appState.whatsAppState?.qrDataUrl,
-                   let image = UIImage(dataURL: qrDataUrl) {
-                    VStack(spacing: 12) {
-                        Image(uiImage: image)
-                            .interpolation(.none)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxWidth: 280)
-                            .frame(maxWidth: .infinity)
-                        Text("Open WhatsApp > Settings > Linked Devices > Link a Device, then scan this QR.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Button(role: .destructive) {
-                    Task { await appState.logoutWhatsApp() }
-                } label: {
-                    Label("Log Out This Account", systemImage: "rectangle.portrait.and.arrow.right")
-                }
-                .disabled(appState.isAdminLoading)
-
-                if let error = appState.whatsAppState?.error, !error.isEmpty {
-                    Text(error)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                }
+                connectedControls
             }
         }
     }
 
-    private func groupSection(config: Binding<PatrolConfig>) -> some View {
-        Section("Who Gets The Messages") {
+    private var loginFields: some View {
+        Group {
+            SecureField("Account password", text: $adminPassword)
+            Button {
+                Task { await appState.loginAdmin(password: adminPassword) }
+            } label: {
+                Label("Connect", systemImage: "lock.open")
+            }
+            .disabled(adminPassword.count < 4 || appState.isAdminLoading)
+        }
+    }
+
+    private var connectedControls: some View {
+        Group {
+            qrCodeView
+
+            Button {
+                Task { await appState.refreshWhatsAppStatus() }
+            } label: {
+                Label("Refresh Status", systemImage: "arrow.clockwise")
+            }
+            .disabled(appState.isAdminLoading)
+
+            Button(role: .destructive) {
+                Task { await appState.logoutWhatsApp() }
+            } label: {
+                Label("Log Out This Session", systemImage: "rectangle.portrait.and.arrow.right")
+            }
+            .disabled(appState.isAdminLoading)
+
+            Button(role: .destructive) {
+                showDeleteConfirm = true
+            } label: {
+                Label("Remove This Account", systemImage: "trash")
+            }
+            .disabled(appState.isAdminLoading || appState.selectedAdminAccountId == "main")
+
+            if let error = appState.whatsAppState?.error, !error.isEmpty {
+                Text(error)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var qrCodeView: some View {
+        if let qrDataUrl = appState.whatsAppState?.qrDataUrl,
+           let image = UIImage(dataURL: qrDataUrl) {
+            VStack(spacing: 12) {
+                Image(uiImage: image)
+                    .interpolation(.none)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: 280)
+                    .frame(maxWidth: .infinity)
+                Text("Open WhatsApp > Settings > Linked Devices > Link a Device, then scan this QR.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+private struct AddAccountSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+    @State private var password = ""
+    let onAdd: (String, String) -> Void
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("Account name", text: $name)
+                    .textInputAutocapitalization(.words)
+                SecureField("Password (min 4 characters)", text: $password)
+            }
+            .keyboardDoneButton()
+            .navigationTitle("Add Session")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add") {
+                        onAdd(name.trimmingCharacters(in: .whitespaces), password)
+                        dismiss()
+                    }
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || password.count < 4)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Setup (step-by-step wizard: chat -> days -> shift -> message -> review)
+
+private enum SetupStep: Int, CaseIterable {
+    case chat, days, shift, message, review
+
+    var title: String {
+        switch self {
+        case .chat: return "Who gets the messages?"
+        case .days: return "Which days?"
+        case .shift: return "Day or night shift?"
+        case .message: return "What should it say?"
+        case .review: return "Review & turn on"
+        }
+    }
+}
+
+private struct SetupTab: View {
+    @ObservedObject var appState: AppState
+    @State private var step: SetupStep = .chat
+    @State private var showSavedConfirmation = false
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let config = Binding($appState.patrolConfig) {
+                    VStack(spacing: 0) {
+                        VStack(spacing: 6) {
+                            ProgressView(value: Double(step.rawValue + 1), total: Double(SetupStep.allCases.count))
+                            Text("Step \(step.rawValue + 1) of \(SetupStep.allCases.count)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding()
+
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 16) {
+                                Text(step.title)
+                                    .font(.title2.weight(.semibold))
+                                stepContent(config: config)
+                            }
+                            .padding()
+                        }
+                        .scrollDismissesKeyboard(.interactively)
+
+                        Divider()
+
+                        HStack {
+                            Button("Back") {
+                                step = SetupStep(rawValue: step.rawValue - 1) ?? .chat
+                            }
+                            .disabled(step == .chat)
+
+                            Spacer()
+
+                            if step == .review {
+                                Button {
+                                    Task {
+                                        let saved = await appState.saveConfig()
+                                        if saved { showSavedConfirmation = true }
+                                    }
+                                } label: {
+                                    if appState.isConfigLoading {
+                                        ProgressView()
+                                    } else {
+                                        Label("Save & Done", systemImage: "checkmark.circle")
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(appState.isConfigLoading)
+                            } else {
+                                Button("Next") {
+                                    step = SetupStep(rawValue: step.rawValue + 1) ?? .review
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+                        }
+                        .padding()
+                    }
+                    .keyboardDoneButton()
+                } else if appState.isConfigLoading {
+                    ProgressView("Loading setup…")
+                } else {
+                    ContentUnavailableView(
+                        "Not Connected",
+                        systemImage: "wifi.slash",
+                        description: Text("Connect a WhatsApp session on the Connect tab first.")
+                    )
+                }
+            }
+            .navigationTitle("Setup")
+            .task {
+                if appState.patrolConfig == nil, !appState.adminToken.isEmpty {
+                    await appState.fetchConfig()
+                }
+            }
+            .alert("Saved", isPresented: $showSavedConfirmation) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Your message and schedule have been saved.")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func stepContent(config: Binding<PatrolConfig>) -> some View {
+        switch step {
+        case .chat:
+            chatStep(config: config)
+        case .days:
+            daysStep(config: config)
+        case .shift:
+            shiftStep(config: config)
+        case .message:
+            messageStep(config: config)
+        case .review:
+            reviewStep(config: config)
+        }
+    }
+
+    private func chatStep(config: Binding<PatrolConfig>) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Pick the WhatsApp group or chat the patrol updates should go to.")
+                .foregroundStyle(.secondary)
+
             if appState.whatsAppState?.chats.isEmpty ?? true {
-                Text("No chats loaded yet. Pull to refresh once WhatsApp is ready.")
+                Text("No chats loaded yet. Connect WhatsApp on the Connect tab first.")
                     .foregroundStyle(.secondary)
             } else {
                 Picker("WhatsApp group or chat", selection: config.groupName) {
@@ -144,111 +360,122 @@ struct ContentView: View {
                         Text(chat.name).tag(chat.name)
                     }
                 }
-                .pickerStyle(.menu)
+                .pickerStyle(.wheel)
             }
         }
     }
 
-    private func messageSection(config: Binding<PatrolConfig>) -> some View {
-        Section("Message") {
-            TextEditor(text: config.message)
-                .frame(minHeight: 100)
+    private func daysStep(config: Binding<PatrolConfig>) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Choose the days a shift starts. This repeats every week.")
+                .foregroundStyle(.secondary)
+            weekdayToggleRow(config: config)
+
+            Divider()
+
+            Text("One-time dates")
+                .font(.headline)
+            Text("Add a single extra shift that isn't part of your weekly routine.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            oneTimeDatesEditor(config: config)
         }
     }
 
-    private func scheduleSection(config: Binding<PatrolConfig>) -> some View {
-        Group {
-            Section("Schedule") {
-                Toggle("Automatic sending", isOn: config.schedule.enabled)
-                weekdayToggleRow(config: config)
-            }
+    private func shiftStep(config: Binding<PatrolConfig>) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("We'll spread the messages naturally across these hours.")
+                .foregroundStyle(.secondary)
 
-            Section("Shift") {
-                HStack {
-                    Button("Day (8:00–20:00)") {
-                        config.schedule.shiftStartHour.wrappedValue = 8
-                        config.schedule.shiftEndHour.wrappedValue = 20
-                    }
-                    Spacer()
-                    Button("Night (20:00–8:00)") {
-                        config.schedule.shiftStartHour.wrappedValue = 20
-                        config.schedule.shiftEndHour.wrappedValue = 8
-                    }
+            HStack(spacing: 12) {
+                shiftCard(
+                    emoji: "☀️", title: "Day", time: "8:00 AM – 8:00 PM",
+                    isSelected: config.wrappedValue.schedule.shiftStartHour == 8 && config.wrappedValue.schedule.shiftEndHour == 20
+                ) {
+                    config.schedule.shiftStartHour.wrappedValue = 8
+                    config.schedule.shiftEndHour.wrappedValue = 20
                 }
-                .buttonStyle(.bordered)
-                .font(.subheadline)
+                shiftCard(
+                    emoji: "🌙", title: "Night", time: "8:00 PM – 8:00 AM",
+                    isSelected: config.wrappedValue.schedule.shiftStartHour == 20 && config.wrappedValue.schedule.shiftEndHour == 8
+                ) {
+                    config.schedule.shiftStartHour.wrappedValue = 20
+                    config.schedule.shiftEndHour.wrappedValue = 8
+                }
             }
+        }
+    }
 
-            DisclosureGroup("Fine-Tune Timing") {
-                Stepper(
-                    "Shift starts \(config.schedule.shiftStartHour.wrappedValue):00",
-                    value: config.schedule.shiftStartHour,
-                    in: 0...23
+    private func shiftCard(emoji: String, title: String, time: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                Text(emoji).font(.system(size: 36))
+                Text(title).font(.headline)
+                Text(time).font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding()
+            .background(isSelected ? Color.accentColor.opacity(0.15) : Color(.secondarySystemGroupedBackground))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(isSelected ? Color.accentColor : .clear, lineWidth: 2)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func messageStep(config: Binding<PatrolConfig>) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("This exact message is sent each time. Keep it natural.")
+                .foregroundStyle(.secondary)
+            TextEditor(text: config.message)
+                .frame(minHeight: 180)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color(.separator), lineWidth: 1)
                 )
-                Stepper(
-                    "Shift ends \(config.schedule.shiftEndHour.wrappedValue):00",
-                    value: config.schedule.shiftEndHour,
-                    in: 0...23
-                )
+        }
+    }
+
+    private func reviewStep(config: Binding<PatrolConfig>) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 8) {
+                LabeledContent("Chat", value: config.wrappedValue.groupName)
+                LabeledContent("Days", value: dayList(config.wrappedValue.schedule.activeShiftDays))
+                LabeledContent("Shift", value: "\(config.wrappedValue.schedule.shiftStartHour):00 – \(config.wrappedValue.schedule.shiftEndHour):00")
+                LabeledContent("Message", value: config.wrappedValue.message)
+                    .lineLimit(3)
+            }
+            .panel()
+
+            Toggle("Send automatically", isOn: config.schedule.enabled)
+
+            DisclosureGroup("Fine-Tune Timing (Optional)") {
                 Stepper(
                     "First message earliest: \(config.schedule.firstSendMinuteMin.wrappedValue) min",
-                    value: config.schedule.firstSendMinuteMin,
-                    in: 0...59
+                    value: config.schedule.firstSendMinuteMin, in: 0...59
                 )
                 Stepper(
                     "First message latest: \(config.schedule.firstSendMinuteMax.wrappedValue) min",
-                    value: config.schedule.firstSendMinuteMax,
-                    in: 0...59
+                    value: config.schedule.firstSendMinuteMax, in: 0...59
                 )
                 Stepper(
                     "Shortest gap: \(config.schedule.minSendIntervalMinutes.wrappedValue) min",
-                    value: config.schedule.minSendIntervalMinutes,
-                    in: 75...240,
-                    step: 5
+                    value: config.schedule.minSendIntervalMinutes, in: 75...240, step: 5
                 )
                 Stepper(
                     "Longest gap: \(config.schedule.maxSendIntervalMinutes.wrappedValue) min",
-                    value: config.schedule.maxSendIntervalMinutes,
-                    in: 75...240,
-                    step: 5
+                    value: config.schedule.maxSendIntervalMinutes, in: 75...240, step: 5
                 )
-                oneTimeDatesEditor(config: config)
             }
         }
     }
 
-    private var saveScheduleSection: some View {
-        Section {
-            Button {
-                Task { await appState.saveConfig() }
-            } label: {
-                Label("Save Setup", systemImage: "checkmark.circle")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(appState.isConfigLoading)
-        }
-    }
-
-    private var activitySection: some View {
-        Section("Activity") {
-            ForEach(appState.logs.prefix(8)) { log in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(log.message)
-                        .font(.subheadline)
-                    Text(log.label)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-    }
-
-    private func refreshSchedulerScreen() async {
-        await appState.refreshWhatsAppStatus()
-        await appState.fetchConfig()
-        await appState.fetchLogs()
+    private func dayList(_ days: [Int]) -> String {
+        guard !days.isEmpty else { return "None" }
+        let names = weekdayLabels.filter { days.contains($0.value) }.map(\.short)
+        return names.joined(separator: ", ")
     }
 
     private func weekdayToggleRow(config: Binding<PatrolConfig>) -> some View {
@@ -300,31 +527,39 @@ struct ContentView: View {
         formatter.timeZone = TimeZone(identifier: "America/Toronto")
         return formatter.string(from: date)
     }
+}
 
-    // MARK: - Patrol
-    // Mirrors patrol.html: mark checkpoints on the map, start live patrol,
-    // and an arrival at a checkpoint sends the configured message.
+// MARK: - Patrol (checkpoints + live GPS detection)
 
-    private var patrolView: some View {
+private struct PatrolTab: View {
+    @ObservedObject var appState: AppState
+    @State private var mapPosition: MapCameraPosition = .region(
+        MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: 43.1394, longitude: -80.2644),
+            span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+        )
+    )
+
+    var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    patrolStatusPanel
-                    checkpointMapPanel
-                    checkpointListPanel
-                    recentActivityPanel
+                    statusPanel
+                    mapPanel
+                    listPanel
                 }
                 .padding()
             }
+            .scrollDismissesKeyboard(.interactively)
+            .keyboardDoneButton()
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Patrol")
             .onAppear { appState.requestLocationAccess() }
             .onDisappear { appState.saveCheckpoints() }
-            .task { await appState.retryQueuedEvents() }
         }
     }
 
-    private var patrolStatusPanel: some View {
+    private var statusPanel: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
@@ -368,11 +603,11 @@ struct ContentView: View {
         .panel()
     }
 
-    private var checkpointMapPanel: some View {
+    private var mapPanel: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label("Checkpoints", systemImage: "map")
                 .font(.headline)
-            Text("Tap the map to drop a checkpoint. When you enter its circle during a live patrol, the message from the Scheduler tab is sent.")
+            Text("Tap the map to drop a checkpoint. When you enter its circle during a live patrol, the message from Setup is sent.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -411,7 +646,7 @@ struct ContentView: View {
         .panel()
     }
 
-    private var checkpointListPanel: some View {
+    private var listPanel: some View {
         VStack(alignment: .leading, spacing: 4) {
             if appState.checkpoints.isEmpty {
                 Text("No checkpoints yet — tap the map above.")
@@ -430,6 +665,13 @@ struct ContentView: View {
                             }
                         }
                         Stepper("Radius \(Int(checkpoint.radiusMeters)) m", value: $checkpoint.radiusMeters, in: 10...1000, step: 10)
+                        Button {
+                            Task { await appState.manualTrigger(checkpoint) }
+                        } label: {
+                            Label("Send Test Arrival", systemImage: "paperplane")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.bordered)
                     }
                     .padding(.vertical, 6)
                     if index < appState.checkpoints.count - 1 {
@@ -441,44 +683,109 @@ struct ContentView: View {
         .panel()
     }
 
-    private var recentActivityPanel: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Label("Recent Arrivals", systemImage: "list.bullet.rectangle")
-                    .font(.headline)
-                Spacer()
-                if appState.isRetrying {
-                    ProgressView()
-                } else {
-                    Button {
-                        Task { await appState.retryQueuedEvents() }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                }
-            }
-
-            if appState.history.isEmpty {
-                Text("No patrol events yet.")
-                    .foregroundStyle(.secondary)
-            } else {
-                let recent = Array(appState.history.prefix(5))
-                ForEach(Array(recent.enumerated()), id: \.element.id) { index, event in
-                    EventRow(event: event)
-                    if index < recent.count - 1 {
-                        Divider()
-                    }
-                }
-            }
+    private func authorizationLabel(_ status: CLAuthorizationStatus) -> String {
+        switch status {
+        case .notDetermined: return "Not requested"
+        case .restricted: return "Restricted"
+        case .denied: return "Denied"
+        case .authorizedAlways: return "Always"
+        case .authorizedWhenInUse: return "When in use"
+        @unknown default: return "Unknown"
         }
-        .panel()
     }
+}
 
-    // MARK: - Settings
-    // Device-only knobs with no equivalent in the browser: geofence
-    // tuning, and where this device sends admin/patrol requests.
+// MARK: - Activity (scheduler log + patrol events, own page)
 
-    private var settingsView: some View {
+private struct ActivityTab: View {
+    @ObservedObject var appState: AppState
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Scheduler Log") {
+                    if appState.logs.isEmpty {
+                        Text("No scheduler activity yet.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(appState.logs) { log in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(log.message)
+                                    .font(.subheadline)
+                                Text(log.label)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+
+                Section {
+                    HStack {
+                        Text("Patrol Events")
+                            .font(.headline)
+                        Spacer()
+                        if appState.isRetrying {
+                            ProgressView()
+                        } else {
+                            Button {
+                                Task { await appState.retryQueuedEvents() }
+                            } label: {
+                                Label("Retry Queue", systemImage: "arrow.clockwise")
+                            }
+                            .font(.caption)
+                        }
+                    }
+
+                    if appState.history.isEmpty {
+                        Text("No patrol events yet.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(appState.history) { event in
+                            VStack(alignment: .leading, spacing: 8) {
+                                EventRow(event: event)
+                                HStack {
+                                    Label(event.webhookReceived ? "Webhook received" : "Webhook pending", systemImage: event.webhookReceived ? "checkmark.circle" : "clock")
+                                    Spacer()
+                                    if let responseCode = event.responseCode {
+                                        Text("HTTP \(responseCode)")
+                                    }
+                                    if let schedulerStatusCode = event.schedulerStatusCode {
+                                        Text("Scheduler \(schedulerStatusCode)")
+                                    }
+                                }
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                                if let summary = event.responseSummary {
+                                    Text(summary)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                if let reason = event.schedulerReason {
+                                    Text(reason)
+                                        .font(.caption)
+                                        .foregroundStyle(.orange)
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Activity")
+            .refreshable { await appState.fetchLogs() }
+            .task { await appState.fetchLogs() }
+        }
+    }
+}
+
+// MARK: - Settings (device-only, no browser equivalent)
+
+private struct SettingsTab: View {
+    @ObservedObject var appState: AppState
+
+    var body: some View {
         NavigationStack {
             Form {
                 Section("Guard") {
@@ -512,21 +819,14 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .keyboardDoneButton()
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Settings")
         }
     }
-
-    private func authorizationLabel(_ status: CLAuthorizationStatus) -> String {
-        switch status {
-        case .notDetermined: return "Not requested"
-        case .restricted: return "Restricted"
-        case .denied: return "Denied"
-        case .authorizedAlways: return "Always"
-        case .authorizedWhenInUse: return "When in use"
-        @unknown default: return "Unknown"
-        }
-    }
 }
+
+// MARK: - Shared subviews
 
 private struct EventRow: View {
     let event: PatrolEvent
@@ -643,6 +943,27 @@ private extension View {
             .background(Color(.secondarySystemGroupedBackground))
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
+
+    /// Adds a "Done" button above the keyboard so text fields/editors can
+    /// always be dismissed -- SwiftUI Forms don't do this automatically.
+    func keyboardDoneButton() -> some View {
+        toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") {
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                }
+            }
+        }
+    }
+}
+
+private extension ContentView {
+    var connectView: some View { ConnectTab(appState: appState) }
+    var setupView: some View { SetupTab(appState: appState) }
+    var patrolView: some View { PatrolTab(appState: appState) }
+    var activityView: some View { ActivityTab(appState: appState) }
+    var settingsView: some View { SettingsTab(appState: appState) }
 }
 
 #Preview {

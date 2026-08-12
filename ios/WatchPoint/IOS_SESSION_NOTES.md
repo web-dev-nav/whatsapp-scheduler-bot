@@ -9,7 +9,78 @@ Do not touch `server.js`, `scheduler.js`, n8n, or Tailscale/Docker config
 from this session. If iOS work seems to need a backend change, add it to
 "Needs from the backend session" below instead of making it yourself.
 
-## Navigation redesign (latest): 6 tabs -> 3, mirroring the browser
+## Navigation redesign #2 (latest): 3 tabs -> 5, real UX fixes
+
+After the 3-tab consolidation below shipped, the user tried it and reported
+concrete bugs, not just a preference: the keyboard never dismissed after
+editing a field, login/message-sending/patrol being crammed into one
+"Scheduler" form felt worse than separate screens, there was no
+confirmation after saving, Activity needed its own page, the schedule
+setup needed the browser's step-by-step wizard feel (not one long form),
+and there was no way to add/remove WhatsApp sessions from the app at all
+(session management existed nowhere in the UI). This was a correction, not
+a reversal of the mirroring goal — the earlier 3-tab merge over-corrected
+by cramming too much into single forms. `ContentView.swift` was rebuilt
+again, this time as five separate top-level view structs (`ConnectTab`,
+`SetupTab`, `PatrolTab`, `ActivityTab`, `SettingsTab`) instead of computed
+properties on one `ContentView` — needed anyway because the old
+single-struct approach hit a real compiler error (`the compiler is unable
+to type-check this expression in reasonable time`) once `ConnectTab`'s
+body got big; splitting into separate structs with extracted computed
+properties both fixes that and keeps each screen's code independently
+readable.
+
+- **Connect tab** — now genuinely does WhatsApp session management, which
+  didn't exist before at all: a list of all accounts from `GET
+  /api/accounts`, tap any row to switch (`AppState.selectAccount`, which
+  clears and reloads `whatsAppState`/`patrolConfig`/`logs` for the newly
+  selected account so stale data from the previous account never lingers),
+  "Add Session" opens a sheet (`AddAccountSheet`) that calls the new `POST
+  /api/accounts` via `SchedulerAdminAPI.createAccount(name:password:)`,
+  and "Remove This Account" calls the new `DELETE /api/accounts` via
+  `SchedulerAdminAPI.deleteAccount()` behind a `confirmationDialog` (can't
+  remove `main`, matching the server's own rule in `server.js`). Login/QR
+  for the selected session live in the same tab underneath, since that's
+  one continuous session-management flow, not a separate concern.
+- **Setup tab** — replaced the single scrolling form with an actual 5-step
+  wizard (`SetupStep` enum: chat, days, shift, message, review), a
+  `ProgressView` + "Step N of 5" header, Back/Next navigation, and the
+  config is only PUT to the server on the final "Save & Done" step (same
+  as the browser's wizard — edits are local until you finish). On a
+  confirmed successful save, an explicit `.alert("Saved", ...)` fires —
+  `AppState.saveConfig()` now returns `Bool` (`@discardableResult`) instead
+  of silently updating `patrolConfig`, so the view only shows the
+  confirmation when the PUT actually succeeded, not optimistically.
+- **Activity tab** — split out on its own, showing the scheduler log
+  (`GET /api/logs`) and full patrol event history with retry, instead of
+  being squeezed into the bottom of another screen.
+- **Patrol tab** — trimmed back to just its own job: status/start-stop,
+  map, checkpoint list. Restored the "Send Test Arrival" button per
+  checkpoint (`AppState.manualTrigger`), which had become dead code after
+  an earlier pass dropped its only caller — this is the native equivalent
+  of the browser's "Test connection (dry run)" button and is worth having
+  for verifying the pipeline without physically driving to a checkpoint.
+- **Keyboard dismissal fix** — every screen with text input now has
+  `.scrollDismissesKeyboard(.interactively)` (drag-to-dismiss, standard
+  since iOS 16) plus a shared `View.keyboardDoneButton()` extension that
+  adds an explicit "Done" button in a `.keyboard`-placed toolbar. This is
+  the actual fix for "the keypad opened but never closed by itself" — plain
+  `Form`/`List` don't dismiss the keyboard on their own in SwiftUI, you
+  have to opt in.
+- **Settings tab** — unchanged in scope.
+
+Rebuilt after each fix with `xcodebuild ... build`. Hit and fixed two real
+compiler errors along the way (both from a fresh build, not assumed):
+`ConnectTab`'s original monolithic `body` timed out the type-checker
+(fixed by extracting `accountsSection`/`selectedSessionSection`/etc. into
+separate computed properties — same fix pattern Swift always needs for
+"reasonable time" errors), and `.foregroundStyle(.accentColor)` failed
+because bare `.accentColor` doesn't resolve against the `ShapeStyle`
+protocol the way it does against `Color` (fixed by writing
+`Color.accentColor` explicitly). Final build: `BUILD SUCCEEDED`, zero
+warnings in changed files.
+
+## Navigation redesign #1 (superseded): 6 tabs -> 3, mirroring the browser
 
 The user flagged that the app's original 6-tab layout (Patrol,
 Checkpoints, History, Connect, Schedule, Settings) didn't match their
@@ -133,18 +204,24 @@ the live URL, not just a build check.
 
 ## Suggested next iOS work
 
-- Wire the Scheduler tab's group `Picker` selection more defensively: if
-  the account's current `groupName` isn't present in the freshly-loaded
-  `chats` list (chat renamed/left), the Picker currently shows nothing
-  selected — consider surfacing that as a visible warning rather than
-  silently leaving `groupName` unchanged until the user picks something.
-- Manual on-device verification, now covering the redesigned nav too: log
-  in on the Scheduler tab → scan QR → confirm chats/message/schedule load
-  → edit and save → confirm it shows in the browser UI's schedule preview
-  → switch to the Patrol tab → drop a checkpoint → Start Live Patrol →
-  walk/drive into the radius → confirm a WhatsApp message actually sends
-  end-to-end (this also exercises the n8n bridge the backend session
-  built).
-- Consider whether "Recent Arrivals" (last 5 events, no full history
-  screen anymore) is enough, or whether a detail view / full list is worth
-  re-adding once real patrol usage shows whether 5 is too few.
+- Wire the Setup wizard's chat `Picker` (step 1) more defensively: if the
+  account's current `groupName` isn't present in the freshly-loaded
+  `chats` list (chat renamed/left), the `.wheel` picker currently shows
+  whatever the raw string value is with no matching row highlighted —
+  consider surfacing that as a visible warning rather than letting it look
+  like a normal selection.
+- Manual on-device verification, covering the current 5-tab nav: Connect
+  tab → add a second test session, switch between sessions, confirm
+  `whatsAppState`/`patrolConfig`/`logs` actually reload per-account and
+  don't leak between accounts → remove the test session → back on the
+  original account, run the Setup wizard end to end (all 5 steps, confirm
+  the "Saved" alert only appears on real success) → confirm it shows in
+  the browser UI's schedule preview → Patrol tab → drop a checkpoint →
+  "Send Test Arrival" to confirm the pipeline → Start Live Patrol → walk
+  into the radius → confirm a real WhatsApp message sends (exercises the
+  n8n bridge the backend session built) → Activity tab → confirm both the
+  scheduler log and the patrol event just fired show up.
+- Activity tab shows full, unbounded history now (no 5-item cap) — worth
+  keeping an eye on performance/scroll if `history` or `logs` grow very
+  large over weeks of use; consider pagination or a cap if that becomes a
+  real problem, not preemptively.

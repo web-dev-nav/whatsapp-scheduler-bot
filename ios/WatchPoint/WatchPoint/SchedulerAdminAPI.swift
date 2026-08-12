@@ -23,6 +23,17 @@ struct AccountAuthResponse: Codable {
     let token: String
 }
 
+struct CreateAccountResponse: Codable {
+    let account: SchedulerAccount
+    let accounts: [SchedulerAccount]
+    let token: String
+}
+
+struct DeleteAccountResponse: Codable {
+    let account: SchedulerAccount
+    let accounts: [SchedulerAccount]
+}
+
 struct WhatsAppAdminState: Codable {
     let account: SchedulerAccount?
     let status: String
@@ -71,6 +82,14 @@ struct SchedulerAdminAPI {
             method: "POST",
             body: ["account": accountId, "password": password]
         )
+    }
+
+    func createAccount(name: String, password: String) async throws -> CreateAccountResponse {
+        try await request(path: "/api/accounts", method: "POST", body: ["name": name, "password": password])
+    }
+
+    func deleteAccount() async throws -> DeleteAccountResponse {
+        try await request(path: "/api/accounts", method: "DELETE", query: ["account": accountId], authorized: true)
     }
 
     func whatsAppStatus() async throws -> WhatsAppAdminState {

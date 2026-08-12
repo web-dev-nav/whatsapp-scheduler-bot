@@ -187,6 +187,58 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
+    func createAccount(name: String, password: String) async {
+        guard let api = adminAPI else {
+            alertMessage = "Scheduler admin URL is invalid."
+            return
+        }
+
+        isAdminLoading = true
+        defer { isAdminLoading = false }
+
+        do {
+            let response = try await api.createAccount(name: name, password: password)
+            adminAccounts = response.accounts
+            KeychainStore.setToken(response.token, accountId: response.account.id)
+            await selectAccount(response.account.id)
+        } catch {
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    func deleteSelectedAccount() async {
+        guard let api = adminAPI else {
+            alertMessage = "Scheduler admin URL is invalid."
+            return
+        }
+
+        isAdminLoading = true
+        defer { isAdminLoading = false }
+
+        do {
+            let response = try await api.deleteAccount()
+            KeychainStore.clearToken(accountId: selectedAdminAccountId)
+            adminAccounts = response.accounts
+            await selectAccount(response.accounts.first?.id ?? "main")
+        } catch {
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    /// Switches the active account and reloads everything scoped to it --
+    /// WhatsApp status, schedule config, and logs are all per-account.
+    func selectAccount(_ accountId: String) async {
+        selectedAdminAccountId = accountId
+        whatsAppState = nil
+        patrolConfig = nil
+        logs = []
+
+        guard !adminToken.isEmpty else { return }
+        await refreshWhatsAppStatus()
+        await fetchConfig()
+        await fetchLogs()
+    }
+
     func refreshWhatsAppStatus() async {
         guard let api = adminAPI else {
             alertMessage = "Scheduler admin URL is invalid."
@@ -219,20 +271,25 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
-    func saveConfig() async {
+    /// Returns true only on a confirmed successful save, so callers can show
+    /// an explicit "Saved" confirmation instead of assuming success.
+    @discardableResult
+    func saveConfig() async -> Bool {
         guard let api = adminAPI else {
             alertMessage = "Scheduler admin URL is invalid."
-            return
+            return false
         }
-        guard let patrolConfig else { return }
+        guard let patrolConfig else { return false }
 
         isConfigLoading = true
         defer { isConfigLoading = false }
 
         do {
             self.patrolConfig = try await api.updateConfig(patrolConfig).config
+            return true
         } catch {
             alertMessage = error.localizedDescription
+            return false
         }
     }
 
