@@ -81,6 +81,20 @@ struct SchedulerAdminAPI {
         try await request(path: "/api/whatsapp/logout", method: "POST", query: ["account": accountId], authorized: true)
     }
 
+    func config() async throws -> ConfigResponse {
+        try await request(path: "/api/config", query: ["account": accountId], authorized: true)
+    }
+
+    func updateConfig(_ config: PatrolConfig) async throws -> ConfigResponse {
+        try await request(
+            path: "/api/config",
+            method: "PUT",
+            query: ["account": accountId],
+            body: ConfigUpdateRequest(config: config),
+            authorized: true
+        )
+    }
+
     private func request<Response: Decodable, Body: Encodable>(
         path: String,
         method: String = "GET",

@@ -135,3 +135,61 @@ enum WebhookError: LocalizedError {
         }
     }
 }
+
+// Mirrors scheduler.js DEFAULT_CONFIG exactly. Round-tripped whole (GET then
+// PUT) so fields the app doesn't expose UI for -- notably patrol.checkpoints,
+// which the browser's patrol.html page owns -- are never dropped or reset.
+struct PatrolConfig: Codable, Hashable {
+    var groupName: String
+    var timezone: String
+    var message: String
+    var schedule: ScheduleConfig
+    var patrol: PatrolSection
+}
+
+struct ScheduleConfig: Codable, Hashable {
+    var enabled: Bool
+    var activeShiftDays: [Int]
+    var extraShiftDates: [String]
+    var shiftStartHour: Int
+    var shiftEndHour: Int
+    var firstSendMinuteMin: Int
+    var firstSendMinuteMax: Int
+    var sendSecondMin: Int
+    var sendSecondMax: Int
+    var minSendIntervalMinutes: Int
+    var maxSendIntervalMinutes: Int
+    var minMinutesBetweenSends: Int
+    var maxSendsPerDay: Int
+    var reconnectCooldownMinutes: Int
+    var staleSendGraceMinutes: Int
+}
+
+struct PatrolSection: Codable, Hashable {
+    var checkpoints: [ServerCheckpoint]
+}
+
+// Server-side GPS checkpoint shape (used by public/patrol.html). Not edited
+// from WatchPoint -- WatchPoint's own checkpoints stay device-local -- but
+// decoded/encoded as-is so saving schedule/message settings from the app
+// never wipes checkpoints saved from the browser.
+struct ServerCheckpoint: Codable, Hashable {
+    var id: String
+    var name: String
+    var lat: Double
+    var lng: Double
+    var radiusMeters: Double
+}
+
+struct ConfigResponse: Decodable {
+    let account: SchedulerAccount
+    let config: PatrolConfig
+}
+
+struct ConfigUpdateRequest: Encodable {
+    let config: PatrolConfig
+}
+
+let weekdayLabels: [(value: Int, short: String)] = [
+    (0, "Sun"), (1, "Mon"), (2, "Tue"), (3, "Wed"), (4, "Thu"), (5, "Fri"), (6, "Sat"),
+]

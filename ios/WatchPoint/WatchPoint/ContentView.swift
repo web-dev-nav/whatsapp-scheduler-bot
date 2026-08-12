@@ -31,6 +31,8 @@ struct ContentView: View {
                 .tabItem { Label("History", systemImage: "clock.arrow.circlepath") }
             connectWhatsAppView
                 .tabItem { Label("Connect", systemImage: "qrcode.viewfinder") }
+            scheduleView
+                .tabItem { Label("Schedule", systemImage: "calendar") }
             settingsView
                 .tabItem { Label("Settings", systemImage: "gearshape") }
         }
@@ -361,6 +363,185 @@ struct ContentView: View {
             }
             .navigationTitle("Connect WhatsApp")
         }
+    }
+
+    private var scheduleView: some View {
+        NavigationStack {
+            Group {
+                if let config = Binding($appState.patrolConfig) {
+                    Form {
+                        Section("WhatsApp Group") {
+                            if appState.whatsAppState?.chats.isEmpty ?? true {
+                                Text("Open Connect and refresh status to load chats.")
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Picker("Target chat", selection: config.groupName) {
+                                    ForEach(appState.whatsAppState?.chats ?? []) { chat in
+                                        Text(chat.name).tag(chat.name)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                            }
+                        }
+
+                        Section("Message") {
+                            TextEditor(text: config.message)
+                                .frame(minHeight: 120)
+                        }
+
+                        Section("Schedule") {
+                            Toggle("Automatic sending", isOn: config.schedule.enabled)
+                        }
+
+                        Section("Weekly Shift Start Days") {
+                            weekdayToggleRow(config: config)
+                        }
+
+                        Section("Shift Window") {
+                            HStack {
+                                Button("Day (8:00–20:00)") {
+                                    config.schedule.shiftStartHour.wrappedValue = 8
+                                    config.schedule.shiftEndHour.wrappedValue = 20
+                                }
+                                Spacer()
+                                Button("Night (20:00–8:00)") {
+                                    config.schedule.shiftStartHour.wrappedValue = 20
+                                    config.schedule.shiftEndHour.wrappedValue = 8
+                                }
+                            }
+                            .buttonStyle(.bordered)
+
+                            Stepper(
+                                "Starts at \(config.schedule.shiftStartHour.wrappedValue):00",
+                                value: config.schedule.shiftStartHour,
+                                in: 0...23
+                            )
+                            Stepper(
+                                "Ends at \(config.schedule.shiftEndHour.wrappedValue):00",
+                                value: config.schedule.shiftEndHour,
+                                in: 0...23
+                            )
+                        }
+
+                        Section("First Message Window") {
+                            Stepper(
+                                "Earliest: \(config.schedule.firstSendMinuteMin.wrappedValue) min after start",
+                                value: config.schedule.firstSendMinuteMin,
+                                in: 0...59
+                            )
+                            Stepper(
+                                "Latest: \(config.schedule.firstSendMinuteMax.wrappedValue) min after start",
+                                value: config.schedule.firstSendMinuteMax,
+                                in: 0...59
+                            )
+                        }
+
+                        Section("Gap Between Messages") {
+                            Stepper(
+                                "Shortest: \(config.schedule.minSendIntervalMinutes.wrappedValue) min",
+                                value: config.schedule.minSendIntervalMinutes,
+                                in: 75...240,
+                                step: 5
+                            )
+                            Stepper(
+                                "Longest: \(config.schedule.maxSendIntervalMinutes.wrappedValue) min",
+                                value: config.schedule.maxSendIntervalMinutes,
+                                in: 75...240,
+                                step: 5
+                            )
+                        }
+
+                        Section("One-Time Shift Dates") {
+                            oneTimeDatesEditor(config: config)
+                        }
+
+                        Section {
+                            Button {
+                                Task { await appState.saveConfig() }
+                            } label: {
+                                Label("Save Schedule", systemImage: "checkmark.circle")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.large)
+                            .disabled(appState.isConfigLoading)
+                        }
+                    }
+                } else if appState.isConfigLoading {
+                    ProgressView("Loading schedule…")
+                } else {
+                    ContentUnavailableView(
+                        "No Schedule Loaded",
+                        systemImage: "calendar.badge.exclamationmark",
+                        description: Text("Connect an account first, then pull to refresh.")
+                    )
+                }
+            }
+            .navigationTitle("Schedule")
+            .toolbar {
+                Button {
+                    Task { await appState.fetchConfig() }
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .disabled(appState.adminToken.isEmpty)
+            }
+            .task {
+                if appState.patrolConfig == nil, !appState.adminToken.isEmpty {
+                    await appState.fetchConfig()
+                }
+            }
+        }
+    }
+
+    private func weekdayToggleRow(config: Binding<PatrolConfig>) -> some View {
+        HStack {
+            ForEach(weekdayLabels, id: \.value) { day in
+                let isOn = config.wrappedValue.schedule.activeShiftDays.contains(day.value)
+                Button(day.short) {
+                    if isOn {
+                        config.schedule.activeShiftDays.wrappedValue.removeAll { $0 == day.value }
+                    } else {
+                        config.schedule.activeShiftDays.wrappedValue.append(day.value)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .tint(isOn ? .accentColor : .secondary)
+                .font(.caption)
+            }
+        }
+    }
+
+    private func oneTimeDatesEditor(config: Binding<PatrolConfig>) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(config.wrappedValue.schedule.extraShiftDates, id: \.self) { date in
+                HStack {
+                    Text(date)
+                    Spacer()
+                    Button(role: .destructive) {
+                        config.schedule.extraShiftDates.wrappedValue.removeAll { $0 == date }
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                }
+            }
+            Button {
+                let today = isoDateString(Date())
+                if !config.wrappedValue.schedule.extraShiftDates.contains(today) {
+                    config.schedule.extraShiftDates.wrappedValue.append(today)
+                    config.schedule.extraShiftDates.wrappedValue.sort()
+                }
+            } label: {
+                Label("Add Today", systemImage: "plus")
+            }
+        }
+    }
+
+    private func isoDateString(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = TimeZone(identifier: "America/Toronto")
+        return formatter.string(from: date)
     }
 
     private var settingsView: some View {

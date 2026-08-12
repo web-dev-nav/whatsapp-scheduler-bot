@@ -25,6 +25,8 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var history: [PatrolEvent] = []
     @Published var adminAccounts: [SchedulerAccount] = []
     @Published var whatsAppState: WhatsAppAdminState?
+    @Published var patrolConfig: PatrolConfig?
+    @Published var isConfigLoading = false
     @Published var currentLocation: CLLocation?
     @Published var locationAuthorization: CLAuthorizationStatus = .notDetermined
     @Published var isAdminLoading = false
@@ -222,6 +224,39 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
 
         do {
             whatsAppState = try await api.whatsAppStatus()
+        } catch {
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    func fetchConfig() async {
+        guard let api = adminAPI else {
+            alertMessage = "Scheduler admin URL is invalid."
+            return
+        }
+
+        isConfigLoading = true
+        defer { isConfigLoading = false }
+
+        do {
+            patrolConfig = try await api.config().config
+        } catch {
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    func saveConfig() async {
+        guard let api = adminAPI else {
+            alertMessage = "Scheduler admin URL is invalid."
+            return
+        }
+        guard let patrolConfig else { return }
+
+        isConfigLoading = true
+        defer { isConfigLoading = false }
+
+        do {
+            self.patrolConfig = try await api.updateConfig(patrolConfig).config
         } catch {
             alertMessage = error.localizedDescription
         }
