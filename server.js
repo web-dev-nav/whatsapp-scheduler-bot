@@ -31,11 +31,19 @@ const LEGACY_WHATSAPP_AUTH_DIR = path.resolve(
 );
 const MS_PER_MINUTE = 60 * 1000;
 const MS_PER_DAY = 24 * 60 * MS_PER_MINUTE;
-// Optional shared secret for the GPS/location trigger webhook. When set, callers
-// must pass it as ?token= or an X-Patrol-Token header. Leave unset for local use.
+// How long an account session token stays valid after login.
+const SESSION_TOKEN_TTL_MS = Number(process.env.SESSION_TOKEN_TTL_HOURS || 24) * 60 * MS_PER_MINUTE;
+// Login attempt limiting for POST /api/accounts/auth, keyed by IP+account.
+const AUTH_ATTEMPT_WINDOW_MS = 15 * MS_PER_MINUTE;
+const AUTH_ATTEMPT_LOCKOUT_MS = 15 * MS_PER_MINUTE;
+const AUTH_ATTEMPT_MAX = 5;
+// Optional shared secret(s) for the location/patrol trigger webhook. When either is
+// set, callers must pass a matching token as ?token=, an X-Patrol-Token header, or
+// {"token": "..."} in the body. Leave both unset for local/LAN-only use.
 const PATROL_TOKEN = process.env.PATROL_TOKEN || '';
 const runtimes = new Map();
 const accountSessions = new Map();
+const authAttempts = new Map();
 let shuttingDown = false;
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -136,12 +144,58 @@ function requireAccountAuth(request, response, accountId) {
 
   const token = authTokenFromRequest(request);
   const session = accountSessions.get(token);
-  if (!session || session.accountId !== account.id) {
-    sendJson(response, 401, { error: `Enter the password for "${account.name}".`, requiresLogin: true });
-    return false;
+  if (session && Date.now() - session.createdAt > SESSION_TOKEN_TTL_MS) {
+    accountSessions.delete(token);
+  } else if (session && session.accountId === account.id) {
+    return true;
   }
 
-  return true;
+  sendJson(response, 401, { error: `Enter the password for "${account.name}".`, requiresLogin: true });
+  return false;
+}
+
+function clientIp(request) {
+  const forwarded = request.headers['x-forwarded-for'];
+  if (forwarded) return String(forwarded).split(',')[0].trim();
+  return request.socket.remoteAddress || 'unknown';
+}
+
+function checkAuthRateLimit(request, accountId) {
+  const key = `${clientIp(request)}:${accountId}`;
+  const attempt = authAttempts.get(key);
+  const now = Date.now();
+
+  if (!attempt) return { allowed: true, key };
+  if (attempt.lockedUntil && now < attempt.lockedUntil) {
+    return { allowed: false, retryAfterMs: attempt.lockedUntil - now };
+  }
+  if (now - attempt.windowStart > AUTH_ATTEMPT_WINDOW_MS) {
+    authAttempts.delete(key);
+    return { allowed: true, key };
+  }
+
+  return { allowed: true, key };
+}
+
+function recordAuthFailure(key) {
+  const now = Date.now();
+  const attempt = authAttempts.get(key) || { count: 0, windowStart: now };
+
+  if (now - attempt.windowStart > AUTH_ATTEMPT_WINDOW_MS) {
+    attempt.count = 0;
+    attempt.windowStart = now;
+  }
+
+  attempt.count += 1;
+  if (attempt.count >= AUTH_ATTEMPT_MAX) {
+    attempt.lockedUntil = now + AUTH_ATTEMPT_LOCKOUT_MS;
+  }
+
+  authAttempts.set(key, attempt);
+}
+
+function clearAuthAttempts(key) {
+  authAttempts.delete(key);
 }
 
 function setAccountPassword(accountId, password) {
@@ -494,7 +548,12 @@ function appendSendHistory(runtime, entry) {
 }
 
 function buildHistoryEntry(status, scheduledAt, config, chat, details = {}) {
-  const hash = messageHash(config.message);
+  // `message` (if passed) is the actual text that was sent/attempted, which can
+  // differ from config.message when a checkpoint/guard-triggered send templated
+  // it via buildTriggeredPatrolMessage. It's used only to compute the hash below
+  // and is not itself persisted, to keep history entries small.
+  const { message, ...rest } = details;
+  const hash = messageHash(message || config.message);
   const chatId = chat?.id?._serialized || null;
 
   return {
@@ -505,7 +564,7 @@ function buildHistoryEntry(status, scheduledAt, config, chat, details = {}) {
     chatId,
     chatName: chat?.name || config.groupName,
     messageHash: hash,
-    ...details,
+    ...rest,
   };
 }
 
@@ -608,14 +667,19 @@ async function sendPatrolMessage(runtime, scheduledAt) {
 // no shift window) but keeps the anti-spam guards that matter: min gap between
 // sends and the daily cap. This prevents re-entering a geofence from spamming
 // the group while still letting a real patrol fire a message immediately.
-async function sendPatrolMessageNow(runtime, { source = 'patrol-gps', checkpointName = null, dryRun = false } = {}) {
+async function sendPatrolMessageNow(
+  runtime,
+  { source = 'patrol-gps', checkpointName = null, guard = null, message: messageOverride = null, dryRun = false } = {}
+) {
   const config = loadConfigFromPath(runtime.paths.configPath);
 
   if (runtime.state.status !== 'ready') {
     return { ok: false, reason: 'WhatsApp is not connected yet.' };
   }
 
-  if (!config.message.trim()) {
+  const message = buildTriggeredPatrolMessage(config, { message: messageOverride, checkpointName, guard });
+
+  if (!message) {
     return { ok: false, reason: 'Message is empty.' };
   }
 
@@ -655,6 +719,7 @@ async function sendPatrolMessageNow(runtime, { source = 'patrol-gps', checkpoint
       ok: true,
       dryRun: true,
       chatName: chat.name,
+      message,
       reason: 'All guards passed. No message was sent (dry run).',
     };
   }
@@ -666,16 +731,19 @@ async function sendPatrolMessageNow(runtime, { source = 'patrol-gps', checkpoint
   );
 
   try {
-    const sentMessage = await chat.sendMessage(config.message);
+    const sentMessage = await chat.sendMessage(message);
     const messageId = sentMessage?.id?._serialized || sentMessage?.id?.id || null;
-    appendSendHistory(runtime, buildHistoryEntry('sent', now, config, chat, { messageId, source, checkpointName }));
+    appendSendHistory(
+      runtime,
+      buildHistoryEntry('sent', now, config, chat, { message, messageId, source, checkpointName, guard })
+    );
     addSchedulerLog(runtime, 'success', `Patrol message sent to "${chat.name}" via ${source}.`, {
       chatName: chat.name,
       messageId,
     });
     return { ok: true, chatName: chat.name, messageId };
   } catch (error) {
-    appendSendHistory(runtime, buildHistoryEntry('failed', now, config, chat, { error: error.message, source }));
+    appendSendHistory(runtime, buildHistoryEntry('failed', now, config, chat, { message, error: error.message, source }));
     addSchedulerLog(runtime, 'error', 'Failed to send location-triggered patrol message.', { error: error.message });
     return { ok: false, reason: error.message };
   }
@@ -902,74 +970,10 @@ function buildTriggeredPatrolMessage(config, payload) {
   return `${baseMessage}\n\n${detailParts.join('\n')}`;
 }
 
-function readPatrolTriggerToken(url, payload) {
-  return sanitizeMessageLine(url.searchParams.get('token') || payload.token);
-}
-
-async function triggerPatrolMessage(runtime, payload, options = {}) {
-  const config = loadConfigFromPath(runtime.paths.configPath);
-  const chat = await findTargetChat(runtime, config.groupName);
-
-  if (!chat) {
-    throw new Error(`Could not find chat "${config.groupName}".`);
-  }
-
-  const message = buildTriggeredPatrolMessage(config, payload);
-
-  if (!message) {
-    throw new Error('Patrol message is empty.');
-  }
-
-  const details = {
-    source: sanitizeMessageLine(payload.source) || 'api',
-    checkpointName: sanitizeMessageLine(payload.checkpointName) || null,
-    guard: sanitizeMessageLine(payload.guard) || null,
-    dryRun: Boolean(options.dryRun),
-  };
-
-  if (options.dryRun) {
-    addSchedulerLog(runtime, 'info', `Dry run patrol trigger prepared for "${chat.name}".`, details);
-    return {
-      dryRun: true,
-      chatId: chat.id._serialized,
-      chatName: chat.name,
-      message,
-      details,
-    };
-  }
-
-  addSchedulerLog(runtime, 'info', `Sending triggered patrol message to "${chat.name}".`, details);
-  const sentMessage = await chat.sendMessage(message);
-  const messageId = sentMessage?.id?._serialized || sentMessage?.id?.id || null;
-  appendSendHistory(
-    runtime,
-    {
-      key: `triggered|${new Date().toISOString()}|${chat.id._serialized}|${messageHash(message)}`,
-      status: 'sent',
-      triggered: true,
-      attemptedAt: new Date().toISOString(),
-      chatId: chat.id._serialized,
-      chatName: chat.name,
-      messageHash: messageHash(message),
-      source: details.source,
-      checkpointName: details.checkpointName,
-      guard: details.guard,
-      messageId,
-    }
+function readPatrolTriggerToken(url, request, payload) {
+  return sanitizeMessageLine(
+    url.searchParams.get('token') || request.headers['x-patrol-token'] || payload.token
   );
-  addSchedulerLog(runtime, 'success', `Triggered patrol message sent to "${chat.name}".`, {
-    ...details,
-    messageId,
-  });
-
-  return {
-    dryRun: false,
-    chatId: chat.id._serialized,
-    chatName: chat.name,
-    message,
-    messageId,
-    details,
-  };
 }
 
 function readRequestBody(request) {
@@ -1044,6 +1048,18 @@ function requireRuntime(response, accountId) {
   return runtime;
 }
 
+// Used by /api/patrol/trigger when the caller doesn't name an account: picks
+// whichever linked WhatsApp account is actually connected, so callers (n8n,
+// iOS Shortcuts, anyone) don't need to know or hardcode a specific account id.
+function findReadyRuntime() {
+  for (const runtime of runtimes.values()) {
+    if (runtime.state.status === 'ready') {
+      return runtime;
+    }
+  }
+  return null;
+}
+
 const server = http.createServer(async (request, response) => {
   try {
     const url = new URL(request.url, `http://${HOST}:${PORT}`);
@@ -1081,11 +1097,22 @@ const server = http.createServer(async (request, response) => {
         return;
       }
 
+      const rateLimit = checkAuthRateLimit(request, account.id);
+      if (!rateLimit.allowed) {
+        sendJson(response, 429, {
+          error: 'Too many failed login attempts. Try again later.',
+          retryAfterSeconds: Math.ceil(rateLimit.retryAfterMs / 1000),
+        });
+        return;
+      }
+
       if (!verifyPassword(account, payload.password || '')) {
+        recordAuthFailure(rateLimit.key);
         sendJson(response, 401, { error: 'Incorrect password.' });
         return;
       }
 
+      clearAuthAttempts(rateLimit.key);
       sendJson(response, 200, { account: publicAccount(account), token: createAccountSession(account.id) });
       return;
     }
@@ -1193,29 +1220,53 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    // GPS/location trigger webhook. Called by the in-app Patrol Mode page when the
-    // phone enters a checkpoint, or by a native phone geofence (iOS Shortcuts /
-    // Android Tasker). Sends the patrol message on demand, guarded against spam.
+    // Patrol trigger webhook. Called by the in-app Patrol Mode page (browser GPS),
+    // a native phone geofence (iOS Shortcuts / Android Tasker), or the n8n bridge
+    // used by WatchPoint. Sends the patrol message on demand, guarded against spam
+    // (cooldown + daily cap), and templates in checkpoint/guard details when given.
     if (request.method === 'POST' && pathname === '/api/patrol/trigger') {
-      if (PATROL_TOKEN) {
-        const provided = url.searchParams.get('token') || request.headers['x-patrol-token'] || '';
-        if (provided !== PATROL_TOKEN) {
+      const body = await readRequestBody(request);
+      const payload = body ? JSON.parse(body) : {};
+      const providedToken = readPatrolTriggerToken(url, request, payload);
+      const requestedAccountId = url.searchParams.get('account');
+
+      if (PATROL_TOKEN || PATROL_TRIGGER_TOKEN) {
+        const validTokens = [PATROL_TOKEN, PATROL_TRIGGER_TOKEN].filter(Boolean);
+        if (!validTokens.includes(providedToken)) {
           sendJson(response, 401, { ok: false, error: 'Invalid or missing patrol token.' });
           return;
         }
-      } else if (!requireAccountAuth(request, response, accountFromUrl(url))) {
+      } else if (!requireAccountAuth(request, response, requestedAccountId || 'main')) {
         return;
       }
 
-      const runtime = requireRuntime(response, accountFromUrl(url));
-      if (!runtime) return;
+      // No ?account= given: don't assume "main" — dynamically use whichever
+      // account is actually connected, so the caller doesn't need to know or
+      // hardcode a specific account id. Pass ?account=<id> to target one
+      // explicitly (e.g. when more than one account is linked at once).
+      let runtime;
+      if (requestedAccountId) {
+        runtime = requireRuntime(response, requestedAccountId);
+        if (!runtime) return;
+      } else {
+        runtime = findReadyRuntime();
+        if (!runtime) {
+          sendJson(response, 409, {
+            ok: false,
+            error: 'No linked WhatsApp account is currently connected.',
+          });
+          return;
+        }
+      }
 
-      const body = await readRequestBody(request);
-      const payload = body ? JSON.parse(body) : {};
-      const dryRun = url.searchParams.get('dryRun') === '1' || payload.dryRun === true;
+      const dryRun =
+        url.searchParams.get('dryRun') === '1' ||
+        ['1', 'true', 'yes'].includes(String(payload.dryRun || '').toLowerCase());
       const result = await sendPatrolMessageNow(runtime, {
         source: payload.source || 'patrol-gps',
         checkpointName: payload.checkpointName || null,
+        guard: payload.guard || null,
+        message: payload.message || null,
         dryRun,
       });
 
@@ -1230,39 +1281,6 @@ const server = http.createServer(async (request, response) => {
       const payload = JSON.parse(body);
       const config = normalizeConfig(payload.config);
       sendJson(response, 200, { config, preview: buildPreview(config) });
-      return;
-    }
-
-    if (request.method === 'POST' && pathname === '/api/patrol/trigger') {
-      const runtime = requireRuntime(response, accountFromUrl(url));
-      if (!runtime) return;
-
-      const body = await readRequestBody(request);
-      const payload = JSON.parse(body || '{}');
-      const providedToken = readPatrolTriggerToken(url, payload);
-
-      if (PATROL_TRIGGER_TOKEN && providedToken !== PATROL_TRIGGER_TOKEN) {
-        sendJson(response, 403, { error: 'Invalid patrol trigger token.' });
-        return;
-      }
-
-      if (runtime.state.status !== 'ready') {
-        sendJson(response, 409, {
-          error: 'WhatsApp is not ready.',
-          status: runtime.state.status,
-          account: runtime.account,
-        });
-        return;
-      }
-
-      const dryRun = ['1', 'true', 'yes'].includes(String(url.searchParams.get('dryRun') || '').toLowerCase());
-      const result = await triggerPatrolMessage(runtime, payload, { dryRun });
-      sendJson(response, 200, {
-        ok: true,
-        account: runtime.account,
-        status: runtime.state.status,
-        ...result,
-      });
       return;
     }
 

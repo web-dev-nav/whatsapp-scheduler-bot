@@ -179,47 +179,66 @@ Preview the schedule in the terminal:
 npm run list:schedule
 ```
 
-Dry-run the GPS webhook without sending a message:
+Dry-run the patrol trigger without sending a message:
 
 ```bash
-curl -sS -X POST 'http://127.0.0.1:3000/api/patrol/trigger?account=main&dryRun=1' \
+curl -sS -X POST 'http://127.0.0.1:3000/api/patrol/trigger?dryRun=1' \
   -H 'Content-Type: application/json' \
   -d '{"source":"install-test"}'
 ```
 
-If `PATROL_TOKEN` is set, include it:
+If `PATROL_TOKEN` (or `PATROL_TRIGGER_TOKEN`) is set, include it:
 
 ```bash
-curl -sS -X POST 'http://127.0.0.1:3000/api/patrol/trigger?account=main&dryRun=1&token=change-this-token' \
+curl -sS -X POST 'http://127.0.0.1:3000/api/patrol/trigger?dryRun=1&token=change-this-token' \
   -H 'Content-Type: application/json' \
   -d '{"source":"install-test"}'
 ```
 
 ## Patrol Trigger API
 
-This repo now exposes the patrol trigger endpoint used by the iPhone Shortcuts -> n8n flow in the automation PDF:
+`POST /api/patrol/trigger` is the single endpoint used by both the browser's
+Patrol Mode GPS page and the iPhone Shortcuts -> n8n flow. It:
 
-```text
-POST /api/patrol/trigger?account=main
-```
+- enforces the same spam guards as the scheduled send (`minMinutesBetweenSends`,
+  `maxSendsPerDay` from `config.json`),
+- sends the configured message as-is, or templates in checkpoint/guard details
+  when they're provided.
+
+**Account targeting is dynamic by default.** Omit `?account=` and the trigger
+uses whichever linked WhatsApp account is currently connected — the caller
+(n8n, a Shortcut, anyone) doesn't need to know or hardcode an account id, and
+nothing breaks if you rename an account or link a different phone later. Pass
+`?account=<id>` explicitly only when more than one account is connected at
+once and you need to pick a specific one. With no account param and none
+connected, the endpoint returns `409 { error: "No linked WhatsApp account is
+currently connected." }`.
 
 Dry run without sending a WhatsApp message:
 
 ```text
-POST /api/patrol/trigger?account=main&dryRun=1
+POST /api/patrol/trigger?dryRun=1
 ```
 
-Optional `.env` token protection:
+Optional `.env` token protection — set **either** variable (they're checked
+interchangeably; set one, not both, to avoid confusion about which is "the"
+token):
 
 ```text
+PATROL_TOKEN=your-secret
+# or
 PATROL_TRIGGER_TOKEN=your-secret
 ```
 
-Then call:
+Then call with the token as a query param, `X-Patrol-Token` header, or
+`{"token": "..."}` in the body:
 
 ```text
-POST /api/patrol/trigger?account=main&token=your-secret
+POST /api/patrol/trigger?token=your-secret
 ```
+
+If neither token env var is set, the endpoint falls back to normal account
+password auth (`X-Account-Auth` session header) instead of a shared secret.
 
 Example JSON body:
 
@@ -227,11 +246,19 @@ Example JSON body:
 {
   "source": "n8n-iphone-shortcuts",
   "guard": "Navjot",
-  "checkpointName": "North checkpoint"
+  "checkpointName": "North checkpoint",
+  "message": "optional override of the configured message"
 }
 ```
 
-The configured message is sent immediately, and the trigger adds checkpoint and guard details at the bottom of the message when provided.
+The configured message (or `message`, if given) is sent, with checkpoint and
+guard details appended when provided.
+
+### Account sessions
+
+`POST /api/accounts/auth` session tokens expire after `SESSION_TOKEN_TTL_HOURS`
+(default 24h) and are rate-limited to 5 failed attempts per 15 minutes per
+IP+account, after which that IP+account pair is locked out for 15 minutes.
 
 ## Deploy To Laravel Forge
 
@@ -329,7 +356,7 @@ http://127.0.0.1:3000/patrol.html
 Patrol Mode lets you save checkpoint pins on a map. While live patrol is running on your phone, the browser watches GPS; when the phone enters a checkpoint circle, it calls:
 
 ```text
-POST /api/patrol/trigger?account=main
+POST /api/patrol/trigger
 ```
 
 The server sends the same saved WhatsApp message to the configured group. The webhook keeps the normal anti-spam guards: minimum time between sends and daily send cap.
@@ -368,7 +395,7 @@ The in-app map is easiest when you can keep the page open. For background trigge
 7. Use this URL, changing the host/token/account:
 
 ```text
-https://your-tunnel.example/api/patrol/trigger?account=main&token=change-this-token
+https://your-tunnel.example/api/patrol/trigger?token=change-this-token
 ```
 
 8. Set the request body to JSON:
