@@ -13,7 +13,7 @@ import SwiftUI
 @MainActor
 final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
     @AppStorage("webhookURL") var webhookURL = productionPatrolWebhookURL
-    @AppStorage("schedulerAdminBaseURL") var schedulerAdminBaseURL = developmentSchedulerAdminURL
+    @AppStorage("schedulerAdminBaseURL") var schedulerAdminBaseURL = productionSchedulerAdminURL
     @AppStorage("selectedAdminAccountId") var selectedAdminAccountId = "main"
     @AppStorage("guardName") var guardName = "navjot"
     @AppStorage("accuracyThresholdMeters") var accuracyThresholdMeters = 50.0

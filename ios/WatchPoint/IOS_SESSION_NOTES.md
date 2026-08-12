@@ -52,25 +52,31 @@ No changes were made to checkpoint/geofencing logic, the n8n webhook path,
 or `SchedulerAdminAPI`'s existing account/QR/logout methods — those were
 already correct.
 
-## Known limitation, not yet fixed
+## Resolved: public admin URL now live
 
-`developmentSchedulerAdminURL` in `WatchPointModels.swift` is still a
-LAN-only IP (`http://172.20.10.3:3000`). QR login, the new Schedule tab,
-and chat loading all depend on `schedulerAdminBaseURL` being reachable —
-today that only works on the home Wi-Fi. This is blocked on the backend
-session exposing the engine's admin API on a public Tailscale Funnel port
-(see `WATCHPOINT_PLAN.md`, Session A step 3). Don't hardcode a funnel URL
-here until that port is confirmed — ask the user if it's not been reported
-yet. In the meantime the field is user-editable in Settings, so this can
-be tested manually by typing the funnel URL in on-device once it exists.
+The backend session confirmed the engine's admin API is exposed via
+Tailscale Funnel at `https://hp-server.tailed5092.ts.net:10000` (→
+`127.0.0.1:3000`, returning 200), with 24h session token expiry and login
+rate-limiting already in place before it went public. `WatchPointModels.swift`'s
+`developmentSchedulerAdminURL` was renamed to `productionSchedulerAdminURL`
+and updated to that value; `AppState.swift`'s default `schedulerAdminBaseURL`
+now points at it. Rebuilt with `xcodebuild` — `BUILD SUCCEEDED`.
+
+Note: `@AppStorage` only applies its default on first read for a fresh key.
+Anyone who already ran a build with the old LAN IP saved will keep using
+that IP until they change it in Settings (Connect tab → Admin base URL) or
+reinstall — this isn't a bug, just how `@AppStorage` defaults work.
+
+Still open: on-device end-to-end verification (login → QR → load
+`/api/config` → edit → save → confirm it shows in the browser UI) hasn't
+been run yet, since that needs a physical device/simulator session against
+the live URL, not just a build check.
 
 ## Needs from the backend session
 
-- The public URL/port the engine's admin API ends up on, once exposed via
-  Tailscale Funnel, so `developmentSchedulerAdminURL` can be updated.
-- Confirmation that `/api/config` semantics haven't changed (full-object
-  PUT, `groupName` matched by chat name) — if the backend session refactors
-  `server.js`, check this file's assumptions still hold.
+- None outstanding. If `server.js`'s `/api/config` semantics change later
+  (full-object PUT, `groupName` matched by chat name), check this file's
+  assumptions still hold before shipping.
 
 ## Suggested next iOS work
 

@@ -8,7 +8,7 @@
 import Foundation
 
 let productionPatrolWebhookURL = "https://hp-server.tailed5092.ts.net/webhook/patrol-test"
-let developmentSchedulerAdminURL = "http://172.20.10.3:3000"
+let productionSchedulerAdminURL = "https://hp-server.tailed5092.ts.net:10000"
 
 struct GuardProfile: Codable, Hashable {
     var name: String
