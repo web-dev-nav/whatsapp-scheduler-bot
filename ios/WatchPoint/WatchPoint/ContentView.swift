@@ -53,6 +53,7 @@ private struct ConnectTab: View {
     @State private var adminPassword = ""
     @State private var showAddAccount = false
     @State private var showDeleteConfirm = false
+    @State private var showFullscreenQR = false
 
     var body: some View {
         NavigationStack {
@@ -187,6 +188,12 @@ private struct ConnectTab: View {
             }
             .disabled(appState.isAdminLoading || appState.selectedAdminAccountId == "main")
 
+            if appState.selectedAdminAccountId == "main" {
+                Text("The \"main\" account can't be removed -- it's the engine's default account and other server behavior falls back to it. Log it out instead if you want to unlink WhatsApp from it.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
             if let error = appState.whatsAppState?.error, !error.isEmpty {
                 Text(error)
                     .font(.footnote)
@@ -200,15 +207,67 @@ private struct ConnectTab: View {
         if let qrDataUrl = appState.whatsAppState?.qrDataUrl,
            let image = UIImage(dataURL: qrDataUrl) {
             VStack(spacing: 12) {
+                Button {
+                    showFullscreenQR = true
+                } label: {
+                    Image(uiImage: image)
+                        .interpolation(.none)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: 280)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.plain)
+
+                Text("You need a **different** phone to scan this -- the one that will actually host this WhatsApp account. You can't scan a code shown on the same screen you're reading it on.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                HStack {
+                    Button {
+                        showFullscreenQR = true
+                    } label: {
+                        Label("View Full Screen", systemImage: "arrow.up.left.and.arrow.down.right")
+                    }
+                    .buttonStyle(.bordered)
+
+                    ShareLink(item: Image(uiImage: image), preview: SharePreview("WhatsApp Login QR")) {
+                        Label("Share", systemImage: "square.and.arrow.up")
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .font(.footnote)
+            }
+            .sheet(isPresented: $showFullscreenQR) {
+                FullscreenQRView(image: image)
+            }
+        }
+    }
+}
+
+private struct FullscreenQRView: View {
+    @Environment(\.dismiss) private var dismiss
+    let image: UIImage
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 20) {
+                Spacer()
                 Image(uiImage: image)
                     .interpolation(.none)
                     .resizable()
                     .scaledToFit()
-                    .frame(maxWidth: 280)
-                    .frame(maxWidth: .infinity)
-                Text("Open WhatsApp > Settings > Linked Devices > Link a Device, then scan this QR.")
-                    .font(.footnote)
+                    .padding()
+                Text("Open WhatsApp on a different phone > Settings > Linked Devices > Link a Device, then scan this code.")
+                    .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
+                    .padding(.horizontal)
+                Spacer()
+            }
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
             }
         }
     }
@@ -279,66 +338,18 @@ private enum SetupStep: Int, CaseIterable {
 private struct SetupTab: View {
     @ObservedObject var appState: AppState
     @State private var step: SetupStep = .chat
+    @State private var isEditing = false
     @State private var showSavedConfirmation = false
 
     var body: some View {
         NavigationStack {
             Group {
                 if let config = Binding($appState.patrolConfig) {
-                    VStack(spacing: 0) {
-                        VStack(spacing: 6) {
-                            ProgressView(value: Double(step.rawValue + 1), total: Double(SetupStep.allCases.count))
-                            Text("Step \(step.rawValue + 1) of \(SetupStep.allCases.count)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding()
-
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 16) {
-                                Text(step.title)
-                                    .font(.title2.weight(.semibold))
-                                stepContent(config: config)
-                            }
-                            .padding()
-                        }
-                        .scrollDismissesKeyboard(.interactively)
-
-                        Divider()
-
-                        HStack {
-                            Button("Back") {
-                                step = SetupStep(rawValue: step.rawValue - 1) ?? .chat
-                            }
-                            .disabled(step == .chat)
-
-                            Spacer()
-
-                            if step == .review {
-                                Button {
-                                    Task {
-                                        let saved = await appState.saveConfig()
-                                        if saved { showSavedConfirmation = true }
-                                    }
-                                } label: {
-                                    if appState.isConfigLoading {
-                                        ProgressView()
-                                    } else {
-                                        Label("Save & Done", systemImage: "checkmark.circle")
-                                    }
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .disabled(appState.isConfigLoading)
-                            } else {
-                                Button("Next") {
-                                    step = SetupStep(rawValue: step.rawValue + 1) ?? .review
-                                }
-                                .buttonStyle(.borderedProminent)
-                            }
-                        }
-                        .padding()
+                    if isEditing {
+                        wizard(config: config)
+                    } else {
+                        overview(config: config)
                     }
-                    .keyboardDoneButton()
                 } else if appState.isConfigLoading {
                     ProgressView("Loading setup…")
                 } else {
@@ -359,6 +370,105 @@ private struct SetupTab: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text("Your message and schedule have been saved.")
+            }
+        }
+    }
+
+    /// Read-only summary of the current setup with a single "Edit Setup"
+    /// button, so returning users land on an overview instead of always
+    /// being dropped back into step 1 of the wizard.
+    private func overview(config: Binding<PatrolConfig>) -> some View {
+        Form {
+            Section("Current Setup") {
+                LabeledContent("Chat", value: config.wrappedValue.groupName.isEmpty ? "Not set" : config.wrappedValue.groupName)
+                LabeledContent("Days", value: dayList(config.wrappedValue.schedule.activeShiftDays))
+                LabeledContent("Shift", value: "\(config.wrappedValue.schedule.shiftStartHour):00 – \(config.wrappedValue.schedule.shiftEndHour):00")
+                LabeledContent("Message", value: config.wrappedValue.message.isEmpty ? "Not set" : config.wrappedValue.message)
+                    .lineLimit(3)
+            }
+
+            Section {
+                Toggle("Automatic sending", isOn: config.schedule.enabled)
+                    .onChange(of: config.wrappedValue.schedule.enabled) { _, _ in
+                        Task { await appState.saveConfig() }
+                    }
+            }
+
+            Section {
+                Button {
+                    step = .chat
+                    isEditing = true
+                } label: {
+                    Label("Edit Setup", systemImage: "pencil")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+            }
+        }
+    }
+
+    private func wizard(config: Binding<PatrolConfig>) -> some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 6) {
+                ProgressView(value: Double(step.rawValue + 1), total: Double(SetupStep.allCases.count))
+                Text("Step \(step.rawValue + 1) of \(SetupStep.allCases.count)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(step.title)
+                        .font(.title2.weight(.semibold))
+                    stepContent(config: config)
+                }
+                .padding()
+            }
+            .scrollDismissesKeyboard(.interactively)
+
+            Divider()
+
+            HStack {
+                Button("Back") {
+                    step = SetupStep(rawValue: step.rawValue - 1) ?? .chat
+                }
+                .disabled(step == .chat)
+
+                Spacer()
+
+                if step == .review {
+                    Button {
+                        Task {
+                            let saved = await appState.saveConfig()
+                            if saved {
+                                showSavedConfirmation = true
+                                isEditing = false
+                            }
+                        }
+                    } label: {
+                        if appState.isConfigLoading {
+                            ProgressView()
+                        } else {
+                            Label("Save & Done", systemImage: "checkmark.circle")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(appState.isConfigLoading)
+                } else {
+                    Button("Next") {
+                        step = SetupStep(rawValue: step.rawValue + 1) ?? .review
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+            .padding()
+        }
+        .keyboardDoneButton()
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { isEditing = false }
             }
         }
     }
@@ -572,6 +682,8 @@ private struct PatrolTab: View {
             span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
         )
     )
+    @State private var hasCenteredOnUser = false
+    @State private var lastAddedCheckpointId: String?
 
     var body: some View {
         NavigationStack {
@@ -589,6 +701,21 @@ private struct PatrolTab: View {
             .navigationTitle("Patrol")
             .onAppear { appState.requestLocationAccess() }
             .onDisappear { appState.saveCheckpoints() }
+            .onChange(of: appState.currentLocation?.coordinate.latitude) { _, _ in
+                // Recenter once, the first time we get a real GPS fix --
+                // otherwise the map stays parked on the hardcoded default
+                // (Waterloo, ON) and "my location" never actually shows up.
+                // CLLocation isn't Equatable, so this keys off latitude
+                // (a Double) as a stand-in for "location changed."
+                guard !hasCenteredOnUser, let location = appState.currentLocation else { return }
+                hasCenteredOnUser = true
+                mapPosition = .region(
+                    MKCoordinateRegion(
+                        center: location.coordinate,
+                        span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+                    )
+                )
+            }
         }
     }
 
@@ -661,7 +788,7 @@ private struct PatrolTab: View {
                 }
                 .onTapGesture { point in
                     if let coordinate = proxy.convert(point, from: .local) {
-                        appState.addCheckpoint(latitude: coordinate.latitude, longitude: coordinate.longitude)
+                        lastAddedCheckpointId = appState.addCheckpoint(latitude: coordinate.latitude, longitude: coordinate.longitude)
                     }
                 }
             }
@@ -669,14 +796,52 @@ private struct PatrolTab: View {
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
             Button {
-                appState.addCheckpoint()
+                lastAddedCheckpointId = appState.addCheckpoint()
             } label: {
                 Label("Drop At My Location", systemImage: "location")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
+            .disabled(appState.currentLocation == nil)
+
+            if appState.currentLocation == nil {
+                Label("Waiting for a GPS fix before this can place a checkpoint at your location.", systemImage: "location.slash")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            radiusQuickEditor
         }
         .panel()
+    }
+
+    /// A radius control right next to the map for whichever checkpoint was
+    /// just placed, so adjusting it doesn't require scrolling down to the
+    /// list -- and its live-updating MapCircle above makes the radius
+    /// change visible immediately.
+    @ViewBuilder
+    private var radiusQuickEditor: some View {
+        if let index = appState.checkpoints.firstIndex(where: { $0.id == lastAddedCheckpointId }) {
+            let checkpoint = appState.checkpoints[index]
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Radius for \"\(checkpoint.name)\"")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Slider(
+                        value: Binding(
+                            get: { appState.checkpoints[index].radiusMeters },
+                            set: { appState.checkpoints[index].radiusMeters = $0 }
+                        ),
+                        in: 10...1000,
+                        step: 10
+                    )
+                    Text("\(Int(checkpoint.radiusMeters)) m")
+                        .font(.subheadline.monospacedDigit())
+                        .frame(width: 60, alignment: .trailing)
+                }
+            }
+        }
     }
 
     private var listPanel: some View {

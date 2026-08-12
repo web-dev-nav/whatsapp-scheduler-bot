@@ -106,18 +106,31 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         alertMessage = error.localizedDescription
     }
 
-    func addCheckpoint(latitude: Double? = nil, longitude: Double? = nil) {
+    /// Returns the new checkpoint's id on success. Returns nil (and adds
+    /// nothing) when no explicit coordinate is given and there's no GPS fix
+    /// yet -- silently falling back to a hardcoded default coordinate
+    /// (previously Waterloo, ON) meant "Drop At My Location" could drop a
+    /// checkpoint nowhere near the user with no indication anything was
+    /// wrong.
+    @discardableResult
+    func addCheckpoint(latitude: Double? = nil, longitude: Double? = nil) -> String? {
+        let resolvedLatitude = latitude ?? currentLocation?.coordinate.latitude
+        let resolvedLongitude = longitude ?? currentLocation?.coordinate.longitude
+        guard let resolvedLatitude, let resolvedLongitude else { return nil }
+
         let next = checkpoints.count + 1
+        let id = "checkpoint-\(next)"
         checkpoints.append(
             Checkpoint(
-                id: "checkpoint-\(next)",
+                id: id,
                 name: "Checkpoint \(next)",
-                latitude: latitude ?? currentLocation?.coordinate.latitude ?? 43.1394,
-                longitude: longitude ?? currentLocation?.coordinate.longitude ?? -80.2644,
+                latitude: resolvedLatitude,
+                longitude: resolvedLongitude,
                 radiusMeters: 100
             )
         )
         saveCheckpoints()
+        return id
     }
 
     func deleteCheckpoint(_ checkpoint: Checkpoint) {

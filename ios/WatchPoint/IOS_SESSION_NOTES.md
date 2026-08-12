@@ -9,7 +9,82 @@ Do not touch `server.js`, `scheduler.js`, n8n, or Tailscale/Docker config
 from this session. If iOS work seems to need a backend change, add it to
 "Needs from the backend session" below instead of making it yourself.
 
-## Bug fixes + branding (latest)
+## Bug fixes round 2 (latest): map radius, QR scannability, Setup overview
+
+- **Map showed no radius circle around the user's actual location.** Root
+  cause was two bugs, not one: (1) `AppState.addCheckpoint()` silently
+  fell back to a hardcoded coordinate (Waterloo, ON) whenever
+  `currentLocation` was nil, so "Drop At My Location" before a GPS fix
+  arrived placed a checkpoint nowhere near the user with zero indication
+  anything was wrong; (2) the map's camera never recentered onto the
+  user's real position -- it stayed on that same hardcoded default region
+  forever unless they manually dragged/zoomed. Fixed both:
+  `addCheckpoint()` now returns `String?` (`@discardableResult`) and
+  returns `nil` without adding anything when no coordinate can be
+  resolved; the "Drop At My Location" button is disabled with an inline
+  explanation while waiting for a fix; and `PatrolTab` recenters the map
+  once, the first time `appState.currentLocation` becomes non-nil (via
+  `.onChange(of: appState.currentLocation?.coordinate.latitude)` --
+  `CLLocation` itself isn't `Equatable` so this keys off the latitude
+  `Double` as a proxy for "location changed").
+- **Radius adjustment made more discoverable.** The per-checkpoint radius
+  `Stepper` already existed in the list below the map, but requiring a
+  scroll away from the map (where the visual feedback actually is) meant
+  it was easy to miss. Added a `Slider`-based quick editor directly under
+  the map for whichever checkpoint was most recently tapped/dropped
+  (`lastAddedCheckpointId`), so the radius circle's live resize is visible
+  in the same screenful as the control that changes it.
+- **QR code shown on the same device you'd scan with -- the fundamental
+  problem.** This is a real UX flaw the redesign inherited from treating
+  "Connect" as a single-device flow: WhatsApp linked-device pairing
+  requires *two* physical devices (one displaying the QR, one with a
+  camera scanning it), but WatchPoint puts the QR on the guard's own
+  phone screen, which that same phone's camera obviously can't scan.
+  What shipped now is a practical mitigation, not a structural fix: the
+  QR is tappable to open a full-screen view (`FullscreenQRView`, easier
+  to read from across a room or off a mirrored/AirPlayed display) plus a
+  `ShareLink` to send the QR image to a different device via
+  AirDrop/Messages, and the caption now explicitly says "you need a
+  **different** phone to scan this." **This still requires the guard to
+  have physical access to a second device** (a laptop showing the QR big,
+  or literally a second phone) at setup time -- normal for the browser
+  flow (laptop + phone), awkward for a single-phone WatchPoint user.
+  **The actual fix** is supporting WhatsApp's pairing-code linking
+  (`client.requestPairingCode(phoneNumber)` in `whatsapp-web.js`, which
+  shows an 8-digit code the user types into WhatsApp's own "Link with
+  phone number" flow -- no camera needed at all, works fine on one
+  device). That needs a new engine endpoint and is backend-session work;
+  flagged below.
+- **Setup tab now shows an overview + Edit button instead of always
+  starting the wizard at step 1.** Added `isEditing` state: by default the
+  tab shows a read-only summary (chat/days/shift/message) plus a quick
+  "Automatic sending" toggle that saves immediately on change
+  (`.onChange` → `saveConfig()`, no need to enter the wizard just to flip
+  one switch), and an "Edit Setup" button that enters the 5-step wizard
+  starting at step 1. Finishing the wizard ("Save & Done" on a confirmed
+  successful save) returns to the overview automatically; a new "Cancel"
+  toolbar button in the wizard also returns to the overview without
+  finishing. Note: since wizard fields are bound directly to
+  `appState.patrolConfig` (no separate draft/staging copy), Cancel does
+  *not* revert already-typed edits on the server-side config object --
+  only a real save (or navigating away and re-fetching) does. This is
+  pre-existing behavior, not a new regression from this change; a real
+  draft/rollback would be a bigger change worth doing separately if it
+  turns out to matter in practice.
+- **"main" account can't be removed -- now explained, not just
+  disabled.** This was already intentional (the server's `deleteAccount`
+  explicitly rejects removing `id === 'main'`, and other server-side
+  fallbacks default to `'main'` when no account is specified), but the
+  button was just silently disabled with no explanation, which reads
+  identically to a bug. Added inline text explaining why, with "log it
+  out instead" as the actual available action. Did not attempt to lift
+  this restriction -- that's a backend policy decision, flagged below
+  rather than made unilaterally.
+
+Rebuilt after each fix with `xcodebuild ... build` → `BUILD SUCCEEDED`,
+zero warnings in changed files.
+
+## Bug fixes + branding
 
 After the 5-tab rework, the user reported the QR login still wasn't
 practically usable (nothing refreshed the QR/status automatically), adding
@@ -253,9 +328,23 @@ the live URL, not just a build check.
 
 ## Needs from the backend session
 
-- None outstanding. If `server.js`'s `/api/config` semantics change later
-  (full-object PUT, `groupName` matched by chat name), check this file's
-  assumptions still hold before shipping.
+- **WhatsApp pairing-code login** (real fix for the QR-can't-scan-itself
+  problem above): a new endpoint that calls
+  `client.requestPairingCode(phoneNumber)` (supported by `whatsapp-web.js`)
+  and returns the resulting code, so a single-device WatchPoint user can
+  type the code into WhatsApp's "Link with phone number" flow instead of
+  needing a second device to scan a QR. Needs a phone number input from
+  the user and a new `WhatsAppAdminState`-like field for the returned
+  code; iOS side is straightforward once the endpoint exists.
+- **Should `main` be deletable?** Currently hard-blocked server-side.
+  Worth a product decision: if guards are expected to fully replace the
+  default account rather than just add more, "main" being permanent could
+  be confusing. Not proposing a change myself since other server code
+  defaults to `'main'` when no account is specified -- deleting it might
+  have wider effects than just this one account-list feature.
+- If `server.js`'s `/api/config` semantics change later (full-object PUT,
+  `groupName` matched by chat name), check this file's assumptions still
+  hold before shipping.
 
 ## Suggested next iOS work
 
