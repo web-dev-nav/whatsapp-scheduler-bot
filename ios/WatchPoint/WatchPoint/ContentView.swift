@@ -674,6 +674,14 @@ private struct SetupTab: View {
 
 // MARK: - Patrol (checkpoints + live GPS detection)
 
+/// Tracks the fixed reference point a radius drag started from, so each
+/// `.onChanged` can compute an absolute new position (start + cumulative
+/// translation) instead of drifting from incremental deltas.
+private struct RadiusDragState {
+    let checkpointId: String
+    let handleStartScreenPoint: CGPoint
+}
+
 private struct PatrolTab: View {
     @ObservedObject var appState: AppState
     @State private var mapPosition: MapCameraPosition = .region(
@@ -684,6 +692,7 @@ private struct PatrolTab: View {
     )
     @State private var hasCenteredOnUser = false
     @State private var lastAddedCheckpointId: String?
+    @State private var radiusDrag: RadiusDragState?
 
     var body: some View {
         NavigationStack {
@@ -770,7 +779,7 @@ private struct PatrolTab: View {
         VStack(alignment: .leading, spacing: 10) {
             Label("Checkpoints", systemImage: "map")
                 .font(.headline)
-            Text("Tap the map to drop a checkpoint. When you enter its circle during a live patrol, the message from Setup is sent.")
+            Text("Tap the map to drop a checkpoint. Drag the white handle on a checkpoint's circle to resize it. When you enter a circle during a live patrol, the message from Setup is sent.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -778,11 +787,15 @@ private struct PatrolTab: View {
                 Map(position: $mapPosition) {
                     UserAnnotation()
                     ForEach(appState.checkpoints) { checkpoint in
-                        Marker(checkpoint.name, coordinate: CLLocationCoordinate2D(latitude: checkpoint.latitude, longitude: checkpoint.longitude))
+                        let center = CLLocationCoordinate2D(latitude: checkpoint.latitude, longitude: checkpoint.longitude)
+                        Marker(checkpoint.name, coordinate: center)
                             .tint(.green)
-                        MapCircle(center: CLLocationCoordinate2D(latitude: checkpoint.latitude, longitude: checkpoint.longitude), radius: checkpoint.radiusMeters)
+                        MapCircle(center: center, radius: checkpoint.radiusMeters)
                             .foregroundStyle(.green.opacity(0.18))
                             .stroke(.green, lineWidth: 2)
+                        Annotation("", coordinate: radiusHandleCoordinate(for: checkpoint)) {
+                            radiusHandle(for: checkpoint, proxy: proxy)
+                        }
                     }
                 }
                 .mapControls {
@@ -882,6 +895,56 @@ private struct PatrolTab: View {
             }
         }
         .panel()
+    }
+
+    /// A point due east of the checkpoint at distance `radiusMeters` --
+    /// where the draggable resize handle sits on the circle's edge. Flat
+    /// approximation (fine at the radii this app supports, max 1000m).
+    private func radiusHandleCoordinate(for checkpoint: Checkpoint) -> CLLocationCoordinate2D {
+        let metersPerDegreeLatitude = 111_320.0
+        let metersPerDegreeLongitude = max(metersPerDegreeLatitude * cos(checkpoint.latitude * .pi / 180), 1)
+        let deltaLongitude = checkpoint.radiusMeters / metersPerDegreeLongitude
+        return CLLocationCoordinate2D(latitude: checkpoint.latitude, longitude: checkpoint.longitude + deltaLongitude)
+    }
+
+    /// Draggable handle on a checkpoint's circle edge. Dragging moves the
+    /// handle; the new radius is the distance from the checkpoint's center
+    /// to wherever the handle's screen position lands, converted back to a
+    /// coordinate via the map's own projection (MapProxy) rather than a
+    /// manual points-per-meter estimate, so it stays correct at any zoom
+    /// level.
+    private func radiusHandle(for checkpoint: Checkpoint, proxy: MapProxy) -> some View {
+        Circle()
+            .fill(.white)
+            .overlay(Circle().stroke(Color.green, lineWidth: 2))
+            .frame(width: 22, height: 22)
+            .shadow(radius: 2)
+            .contentShape(Circle())
+            .gesture(
+                DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                    .onChanged { value in
+                        if radiusDrag?.checkpointId != checkpoint.id {
+                            guard let startPoint = proxy.convert(radiusHandleCoordinate(for: checkpoint), to: .local) else { return }
+                            radiusDrag = RadiusDragState(checkpointId: checkpoint.id, handleStartScreenPoint: startPoint)
+                        }
+                        guard let drag = radiusDrag, drag.checkpointId == checkpoint.id else { return }
+
+                        let newPoint = CGPoint(
+                            x: drag.handleStartScreenPoint.x + value.translation.width,
+                            y: drag.handleStartScreenPoint.y + value.translation.height
+                        )
+                        guard let newCoordinate = proxy.convert(newPoint, from: .local) else { return }
+
+                        let center = CLLocation(latitude: checkpoint.latitude, longitude: checkpoint.longitude)
+                        let newRadius = center.distance(from: CLLocation(latitude: newCoordinate.latitude, longitude: newCoordinate.longitude))
+                        guard let index = appState.checkpoints.firstIndex(where: { $0.id == checkpoint.id }) else { return }
+                        appState.checkpoints[index].radiusMeters = min(max(newRadius, 10), 1000)
+                    }
+                    .onEnded { _ in
+                        radiusDrag = nil
+                        appState.saveCheckpoints()
+                    }
+            )
     }
 
     private func authorizationLabel(_ status: CLAuthorizationStatus) -> String {

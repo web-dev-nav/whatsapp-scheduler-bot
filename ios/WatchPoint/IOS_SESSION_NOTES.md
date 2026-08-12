@@ -9,7 +9,44 @@ Do not touch `server.js`, `scheduler.js`, n8n, or Tailscale/Docker config
 from this session. If iOS work seems to need a backend change, add it to
 "Needs from the backend session" below instead of making it yourself.
 
-## Bug fixes round 3 (latest): location deadlock, spurious "cancelled" alert
+## Draggable radius handle on the map (latest)
+
+User asked for a way to freely adjust a checkpoint's radius directly on
+the map, rather than only via the `Stepper` in the list or the `Slider`
+under the map (both still present -- this is additive, for coarse/visual
+adjustment, not a replacement for precise numeric entry).
+
+Implementation, since the declarative SwiftUI `Map` API has no built-in
+draggable-overlay support: each checkpoint gets an extra `Annotation`
+placed at a point due east of its center at distance `radiusMeters`
+(`radiusHandleCoordinate(for:)`, flat-earth approximation -- accurate
+enough up to the app's 1000m radius cap) rendered as a small white circle
+handle. A `DragGesture` on that handle:
+1. On the first `.onChanged` of a given drag, captures the handle's
+   current on-screen point via `MapProxy.convert(_:to:)` and stores it in
+   `RadiusDragState` (keyed by checkpoint id, so a second finger/checkpoint
+   doesn't confuse state).
+2. Each subsequent `.onChanged` computes `handleStartScreenPoint +
+   value.translation` (translation is cumulative from gesture start, not
+   per-frame, so this doesn't drift), converts that point back to a
+   coordinate via `MapProxy.convert(_:from:)`, and sets
+   `radiusMeters = distance(from: checkpoint center)`, clamped 10...1000.
+3. `.onEnded` clears the drag state and persists via `saveCheckpoints()`.
+
+Deliberately used `MapProxy`'s coordinate<->point conversion rather than a
+manual meters-per-pixel calculation from the map's region span and view
+size -- `MapProxy` already accounts for the current zoom/projection
+correctly, and the existing tap-to-add-checkpoint code already relied on
+the same API (`proxy.convert(point, from: .local)`), so this follows an
+established, already-verified-working pattern rather than introducing a
+second, parallel math path that could disagree with it.
+
+Verified with `xcodebuild ... build` → `BUILD SUCCEEDED`, no warnings.
+Confirmed `MapProxy.convert(_:to:)` (coordinate → point) exists and has
+the expected signature by letting the build itself validate it, not by
+assuming from memory.
+
+## Bug fixes round 3: location deadlock, spurious "cancelled" alert
 
 Two real, confirmed-from-code bugs reported after round 2 shipped:
 
