@@ -700,7 +700,10 @@ private struct PatrolTab: View {
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Patrol")
             .onAppear { appState.requestLocationAccess() }
-            .onDisappear { appState.saveCheckpoints() }
+            .onDisappear {
+                appState.saveCheckpoints()
+                appState.stopWatchingLocationIfIdle()
+            }
             .onChange(of: appState.currentLocation?.coordinate.latitude) { _, _ in
                 // Recenter once, the first time we get a real GPS fix --
                 // otherwise the map stays parked on the hardcoded default
@@ -805,9 +808,9 @@ private struct PatrolTab: View {
             .disabled(appState.currentLocation == nil)
 
             if appState.currentLocation == nil {
-                Label("Waiting for a GPS fix before this can place a checkpoint at your location.", systemImage: "location.slash")
+                Label(waitingForLocationMessage, systemImage: "location.slash")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(waitingForLocationMessage.contains("Settings") ? .orange : .secondary)
             }
 
             radiusQuickEditor
@@ -889,6 +892,17 @@ private struct PatrolTab: View {
         case .authorizedAlways: return "Always"
         case .authorizedWhenInUse: return "When in use"
         @unknown default: return "Unknown"
+        }
+    }
+
+    private var waitingForLocationMessage: String {
+        switch appState.locationAuthorization {
+        case .denied, .restricted:
+            return "Location access is off for WatchPoint. Turn it on in Settings > Privacy > Location Services > WatchPoint to place checkpoints."
+        case .notDetermined:
+            return "Tap \"Drop At My Location\" or reopen this tab to allow location access -- iOS should prompt you."
+        default:
+            return "Finding your location… this can take a few seconds outdoors, longer indoors."
         }
     }
 }

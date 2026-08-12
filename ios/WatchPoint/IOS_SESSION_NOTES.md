@@ -9,7 +9,58 @@ Do not touch `server.js`, `scheduler.js`, n8n, or Tailscale/Docker config
 from this session. If iOS work seems to need a backend change, add it to
 "Needs from the backend session" below instead of making it yourself.
 
-## Bug fixes round 2 (latest): map radius, QR scannability, Setup overview
+## Bug fixes round 3 (latest): location deadlock, spurious "cancelled" alert
+
+Two real, confirmed-from-code bugs reported after round 2 shipped:
+
+- **"WatchPoint: cancelled" popup when switching accounts.** Every
+  `AppState` network method's `catch` block did `alertMessage =
+  error.localizedDescription`, with no distinction between a real failure
+  and a request that was cancelled on purpose. Switching accounts quickly
+  (or `.task(id:)` in `ConnectTab` restarting its polling loop when
+  `selectedAdminAccountId` changes) cancels in-flight requests as a normal
+  matter of course -- `URLError.cancelled`'s `localizedDescription` is
+  literally "cancelled," which is exactly what the user saw as
+  "WatchPoint: cancelled" (the alert's title is hardcoded to "WatchPoint").
+  Added `AppState.presentError(_:)`, which swallows `CancellationError`
+  and `URLError.cancelled` instead of surfacing them, and replaced all 9
+  call sites (verified by grep, not assumed) with it.
+- **Checkpoint placement was fully deadlocked -- "not working at all" was
+  accurate.** `locationManager.startUpdatingLocation()` was *only* ever
+  called from inside `startPatrol()`. But: "Start Live Patrol" is disabled
+  until at least one checkpoint exists: `.disabled(appState.checkpoints.isEmpty)`,
+  and (from the previous round's fix) "Drop At My Location" is disabled
+  until `currentLocation` is non-nil. Since `currentLocation` only ever
+  got set inside `locationManager(_:didUpdateLocations:)`, which only
+  fires after `startUpdatingLocation()` is called, which only happens
+  inside `startPatrol()`, which requires a checkpoint to already exist --
+  there was no way to ever place the first checkpoint. Confirmed this by
+  reading `requestLocationAccess()` (only requested *permission*, never
+  started updates) and `locationManagerDidChangeAuthorization` (only
+  started updates `if shiftIsActive`). Fixed by decoupling "watch my
+  location for map/checkpoint purposes" from "patrol is actively running":
+  `requestLocationAccess()` now also calls `startUpdatingLocation()`
+  whenever already authorized, `locationManagerDidChangeAuthorization`
+  starts updates as soon as permission is granted regardless of
+  `shiftIsActive`, and a new `stopWatchingLocationIfIdle()` (called from
+  `PatrolTab.onDisappear`) stops updates again when leaving the tab if no
+  patrol is actually running, so this doesn't run location services
+  forever just because the tab was opened once. Also reworded the "waiting
+  for GPS" caption (the user said they didn't understand what it meant)
+  into three concrete states based on `locationAuthorization`: permission
+  denied → tells them to go to Settings; not yet asked → tells them a
+  prompt should appear; authorized but no fix yet → "Finding your
+  location…".
+- **"main" account removal**: asked the user directly rather than guessing
+  whether to lift the server-side restriction (crosses into the backend
+  session's territory). They chose to keep it protected — no change made,
+  none needed. The existing inline explanation ("main can't be removed,
+  log it out instead") stands as the intended behavior, not a bug.
+
+Rebuilt with `xcodebuild ... build` → `BUILD SUCCEEDED`, no warnings in
+changed files.
+
+## Bug fixes round 2: map radius, QR scannability, Setup overview
 
 - **Map showed no radius circle around the user's actual location.** Root
   cause was two bugs, not one: (1) `AppState.addCheckpoint()` silently

@@ -54,6 +54,19 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         KeychainStore.token(accountId: selectedAdminAccountId)
     }
 
+    /// Shows an alert for a real failure, but swallows cancellation --
+    /// switching accounts/tabs quickly cancels in-flight requests as a
+    /// matter of course (SwiftUI cancels `.task` when its id changes, and
+    /// `selectAccount` supersedes itself when called again before the
+    /// previous call finishes). That's expected, not an error, and
+    /// surfacing it as "WatchPoint: cancelled" just confused whether
+    /// something had actually gone wrong.
+    private func presentError(_ error: Error) {
+        if error is CancellationError { return }
+        if let urlError = error as? URLError, urlError.code == .cancelled { return }
+        alertMessage = error.localizedDescription
+    }
+
     var nearestCheckpoint: (checkpoint: Checkpoint, distance: CLLocationDistance)? {
         guard let currentLocation, !checkpoints.isEmpty else { return nil }
         return checkpoints
@@ -69,10 +82,31 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
             .first
     }
 
+    /// Requests permission if needed, and starts watching location if
+    /// already authorized. This runs independently of `shiftIsActive` --
+    /// placing a checkpoint at "my location" needs `currentLocation` to be
+    /// populated *before* a patrol starts, and starting a patrol requires
+    /// at least one checkpoint to already exist, so gating location
+    /// updates behind "patrol is active" made it impossible to ever place
+    /// the first checkpoint.
     func requestLocationAccess() {
-        if locationManager.authorizationStatus == .notDetermined {
+        switch locationManager.authorizationStatus {
+        case .notDetermined:
             locationManager.requestWhenInUseAuthorization()
+        case .authorizedWhenInUse, .authorizedAlways:
+            locationManager.startUpdatingLocation()
+        default:
+            break
         }
+    }
+
+    /// Stops location updates when nothing needs them anymore -- called
+    /// when leaving the Patrol tab while no patrol is active, so watching
+    /// location doesn't run indefinitely just because the tab was opened
+    /// once. Does nothing while a patrol is actually running.
+    func stopWatchingLocationIfIdle() {
+        guard !shiftIsActive else { return }
+        locationManager.stopUpdatingLocation()
     }
 
     func startPatrol() {
@@ -90,7 +124,7 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         locationAuthorization = manager.authorizationStatus
-        if shiftIsActive {
+        if shiftIsActive || locationAuthorization == .authorizedWhenInUse || locationAuthorization == .authorizedAlways {
             manager.startUpdatingLocation()
         }
     }
@@ -103,7 +137,7 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        alertMessage = error.localizedDescription
+        presentError(error)
     }
 
     /// Returns the new checkpoint's id on success. Returns nil (and adds
@@ -177,7 +211,7 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
                 selectedAdminAccountId = adminAccounts.first?.id ?? "main"
             }
         } catch {
-            alertMessage = error.localizedDescription
+            presentError(error)
         }
     }
 
@@ -196,7 +230,7 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
             KeychainStore.setToken(response.token, accountId: response.account.id)
             await refreshWhatsAppStatus()
         } catch {
-            alertMessage = error.localizedDescription
+            presentError(error)
         }
     }
 
@@ -215,7 +249,7 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
             KeychainStore.setToken(response.token, accountId: response.account.id)
             await selectAccount(response.account.id)
         } catch {
-            alertMessage = error.localizedDescription
+            presentError(error)
         }
     }
 
@@ -234,7 +268,7 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
             adminAccounts = response.accounts
             await selectAccount(response.accounts.first?.id ?? "main")
         } catch {
-            alertMessage = error.localizedDescription
+            presentError(error)
         }
     }
 
@@ -268,7 +302,7 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         do {
             whatsAppState = try await api.whatsAppStatus()
         } catch {
-            alertMessage = error.localizedDescription
+            presentError(error)
         }
     }
 
@@ -284,7 +318,7 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         do {
             patrolConfig = try await api.config().config
         } catch {
-            alertMessage = error.localizedDescription
+            presentError(error)
         }
     }
 
@@ -305,7 +339,7 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
             self.patrolConfig = try await api.updateConfig(patrolConfig).config
             return true
         } catch {
-            alertMessage = error.localizedDescription
+            presentError(error)
             return false
         }
     }
@@ -331,7 +365,7 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         do {
             whatsAppState = try await api.logoutWhatsApp()
         } catch {
-            alertMessage = error.localizedDescription
+            presentError(error)
         }
     }
 
