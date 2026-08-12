@@ -9,7 +9,62 @@ Do not touch `server.js`, `scheduler.js`, n8n, or Tailscale/Docker config
 from this session. If iOS work seems to need a backend change, add it to
 "Needs from the backend session" below instead of making it yourself.
 
-## Navigation redesign #2 (latest): 3 tabs -> 5, real UX fixes
+## Bug fixes + branding (latest)
+
+After the 5-tab rework, the user reported the QR login still wasn't
+practically usable (nothing refreshed the QR/status automatically), adding
+a session froze the app, and asked for the app name and an icon to be set
+(both were still Xcode scaffolding defaults).
+
+- **QR login now auto-polls.** `ConnectTab` had a one-shot status fetch on
+  first appear and otherwise relied on the user tapping "Refresh Status"
+  repeatedly — that's why login "wasn't really possible" in practice: a
+  freshly generated QR code, or a status flip to `ready` after scanning,
+  would only show up if you happened to tap refresh at the right moment.
+  Added a `.task(id: pollKey)` loop that calls `refreshWhatsAppStatus()`
+  every 3s until `status == "ready"`, keyed on
+  `"\(selectedAdminAccountId)|\(adminToken.isEmpty)"` so it automatically
+  restarts on both an account switch and right after login succeeds
+  (token flips from empty to set), and stops polling once ready.
+- **Add-session freeze, root cause and fix.** `AddAccountSheet` dismissed
+  itself immediately on tapping "Add," before the network call even
+  started, while `AppState.selectAccount` (called at the end of
+  `createAccount`) awaited three admin API calls *serially*
+  (`refreshWhatsAppStatus` → `fetchConfig` → `fetchLogs`, each with a 15s
+  timeout). With the sheet already gone and no loading indicator anywhere,
+  a slow network made the whole app look hung for up to 45s with zero
+  feedback. Two fixes: `AppState.selectAccount` now runs those three calls
+  concurrently with `async let` (worst case ~15s instead of ~45s), and
+  `AddAccountSheet` now stays open with a disabled/spinner "Add" button
+  and `.interactiveDismissDisabled(isSubmitting)` until `onAdd` actually
+  completes, so the user gets visible progress instead of nothing.
+- **App name and icon.** Set `INFOPLIST_KEY_CFBundleDisplayName =
+  WatchPoint` explicitly in `WatchPoint.xcodeproj/project.pbxproj` (it was
+  previously only implied via `PRODUCT_NAME = "$(TARGET_NAME)"`, which
+  happened to also read "WatchPoint" but wasn't an explicit, intentional
+  setting). Generated a real app icon since
+  `Assets.xcassets/AppIcon.appiconset` had icon slots declared but no
+  actual image files — no design tool was available in this environment,
+  so it was rendered programmatically: a small Swift/CoreGraphics script
+  (not checked into the repo, was a `/tmp` scratch file) draws the
+  `shield.lefthalf.filled` SF Symbol in white over a green gradient at
+  exactly 1024x1024 with no alpha channel (Apple rejects icons with any
+  alpha channel, even fully opaque ones — used a raw `CGContext` with
+  `.noneSkipLast` bitmap info to guarantee that, since `NSImage.lockFocus`
+  produces Retina-scaled images with alpha by default and `sips` can't
+  strip alpha after the fact). Simplified `AppIcon.appiconset/Contents.json`
+  down to a single "universal" 1024x1024 entry instead of the default
+  light/dark/tinted three-slot scaffold, since only one image was
+  provided. Verified in the actual build output: `CFBundleDisplayName` =
+  `WatchPoint` and `CFBundleIcons.CFBundlePrimaryIcon.CFBundleIconName` =
+  `AppIcon` both landed correctly in the compiled `Info.plist`, and
+  `AppIcon60x60@2x.png`/`AppIcon76x76@2x~ipad.png` were emplaced into the
+  `.app` bundle by `actool`.
+
+Rebuilt after each fix with `xcodebuild ... build` → `BUILD SUCCEEDED`
+every time, zero warnings in changed files.
+
+## Navigation redesign #2: 3 tabs -> 5, real UX fixes
 
 After the 3-tab consolidation below shipped, the user tried it and reported
 concrete bugs, not just a preference: the keyboard never dismissed after

@@ -234,9 +234,13 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         logs = []
 
         guard !adminToken.isEmpty else { return }
-        await refreshWhatsAppStatus()
-        await fetchConfig()
-        await fetchLogs()
+        // Run concurrently -- these are three independent GET requests, no
+        // reason to make the user wait for them serially (each has its own
+        // 15s timeout, so doing this one-at-a-time can look like a freeze).
+        async let status: Void = refreshWhatsAppStatus()
+        async let config: Void = fetchConfig()
+        async let recentLogs: Void = fetchLogs()
+        _ = await (status, config, recentLogs)
     }
 
     func refreshWhatsAppStatus() async {

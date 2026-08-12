@@ -77,7 +77,7 @@ private struct ConnectTab: View {
             }
             .sheet(isPresented: $showAddAccount) {
                 AddAccountSheet { name, password in
-                    Task { await appState.createAccount(name: name, password: password) }
+                    await appState.createAccount(name: name, password: password)
                 }
             }
             .task {
@@ -86,7 +86,25 @@ private struct ConnectTab: View {
                     await appState.refreshWhatsAppStatus()
                 }
             }
+            .task(id: pollKey) {
+                // Auto-poll status (and any QR code the server generates)
+                // until WhatsApp is ready, so scanning the QR "just works"
+                // without the user having to keep tapping Refresh.
+                guard !appState.adminToken.isEmpty else { return }
+                while !Task.isCancelled {
+                    await appState.refreshWhatsAppStatus()
+                    if appState.whatsAppState?.status == "ready" { break }
+                    try? await Task.sleep(for: .seconds(3))
+                }
+            }
         }
+    }
+
+    /// Restarts the polling task above whenever the selected account
+    /// changes, or right after a login completes (token goes from empty to
+    /// set) -- both cases need a fresh poll loop.
+    private var pollKey: String {
+        "\(appState.selectedAdminAccountId)|\(appState.adminToken.isEmpty)"
     }
 
     private var accountsSection: some View {
@@ -200,7 +218,8 @@ private struct AddAccountSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
     @State private var password = ""
-    let onAdd: (String, String) -> Void
+    @State private var isSubmitting = false
+    let onAdd: (String, String) async -> Void
 
     var body: some View {
         NavigationStack {
@@ -208,21 +227,35 @@ private struct AddAccountSheet: View {
                 TextField("Account name", text: $name)
                     .textInputAutocapitalization(.words)
                 SecureField("Password (min 4 characters)", text: $password)
+
+                if isSubmitting {
+                    HStack {
+                        Spacer()
+                        ProgressView("Creating session…")
+                        Spacer()
+                    }
+                }
             }
             .keyboardDoneButton()
             .navigationTitle("Add Session")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .disabled(isSubmitting)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Add") {
-                        onAdd(name.trimmingCharacters(in: .whitespaces), password)
-                        dismiss()
+                        isSubmitting = true
+                        Task {
+                            await onAdd(name.trimmingCharacters(in: .whitespaces), password)
+                            isSubmitting = false
+                            dismiss()
+                        }
                     }
-                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || password.count < 4)
+                    .disabled(isSubmitting || name.trimmingCharacters(in: .whitespaces).isEmpty || password.count < 4)
                 }
             }
+            .interactiveDismissDisabled(isSubmitting)
         }
     }
 }
