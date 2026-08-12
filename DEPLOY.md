@@ -36,7 +36,16 @@ HOST=127.0.0.1
 PORT=3000
 DATA_DIR=/home/forge/.whatsapp-scheduler-bot
 PATROL_TOKEN=change-this-token
+# Optional: how long an account login session stays valid before re-login is
+# required. Defaults to 24 hours if unset.
+SESSION_TOKEN_TTL_HOURS=24
 ```
+
+`PATROL_TOKEN` and `PATROL_TRIGGER_TOKEN` are checked interchangeably by
+`/api/patrol/trigger` — set one, not both. `POST /api/accounts/auth` is
+rate-limited to 5 failed attempts per 15 minutes per IP+account before a
+15-minute lockout, which matters once this port is reachable from the public
+internet (e.g. via a Tailscale Funnel) rather than just the LAN.
 
 Runtime files stored there:
 
@@ -126,7 +135,7 @@ The patrol page uses browser GPS, so it must be opened over HTTPS on iPhone. Ent
 Native iPhone Shortcuts can call the same webhook:
 
 ```text
-POST https://YOUR-DOMAIN.com/api/patrol/trigger?account=main&token=change-this-token
+POST https://YOUR-DOMAIN.com/api/patrol/trigger?token=change-this-token
 ```
 
 Use JSON like:
