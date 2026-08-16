@@ -20,7 +20,7 @@ struct EventRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(event.checkpointName)
                     .font(.subheadline.weight(.semibold))
-                Text(event.timestamp, format: Date.FormatStyle(date: .abbreviated, time: .shortened))
+                Text("\(event.guardName) · \(event.timestamp.formatted(date: .omitted, time: .shortened))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

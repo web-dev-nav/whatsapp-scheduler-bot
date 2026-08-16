@@ -27,13 +27,16 @@ struct AccountTab: View {
                     Text("WhatsApp Session")
                 } footer: {
                     if let account = appState.adminAccounts.first(where: { $0.id == appState.selectedAdminAccountId }) {
-                        Text("Currently on \"\(account.name)\". Switch accounts, log in/out, or add and remove sessions here.")
+                        Text("Currently on \"\(account.name)\" (\(appState.guardName)). Each account is a separate guard: its own WhatsApp login, checkpoints, patrol history, and guard name. Switching accounts switches all of it, and stops any patrol in progress.")
                     }
                 }
 
                 Section("Configuration") {
                     NavigationLink("Message & Schedule") {
                         SetupView(appState: appState)
+                    }
+                    NavigationLink("Host & Connection") {
+                        HostStatusView(appState: appState)
                     }
                     NavigationLink("Preferences") {
                         PreferencesView(appState: appState)
@@ -63,6 +66,7 @@ private struct WhatsAppSessionView: View {
     var body: some View {
         List {
             accountsSection
+            guardNameSection
             selectedSessionSection
         }
         .navigationTitle("WhatsApp Session")
@@ -106,7 +110,7 @@ private struct WhatsAppSessionView: View {
     }
 
     private var accountsSection: some View {
-        Section("WhatsApp Sessions") {
+        Section {
             ForEach(appState.adminAccounts) { account in
                 accountRow(account)
             }
@@ -114,8 +118,12 @@ private struct WhatsAppSessionView: View {
             Button {
                 showAddAccount = true
             } label: {
-                Label("Add Session", systemImage: "plus.circle")
+                Label("Add Guard", systemImage: "plus.circle")
             }
+        } header: {
+            Text("Guards")
+        } footer: {
+            Text("Each guard is a separate WhatsApp account with its own login, checkpoints, schedule, and history.")
         }
     }
 
@@ -133,6 +141,20 @@ private struct WhatsAppSessionView: View {
                         .foregroundStyle(Color.accentColor)
                 }
             }
+        }
+    }
+
+    /// Local-only, per-account -- this is the name attached to every patrol
+    /// event this guard sends, kept separate from the WhatsApp account name
+    /// (which is server-side and can be reused/renamed independently).
+    private var guardNameSection: some View {
+        Section {
+            TextField("Guard name", text: $appState.guardName)
+                .textInputAutocapitalization(.words)
+        } header: {
+            Text("This Guard")
+        } footer: {
+            Text("Shown in the duty log for every patrol event sent from this account. Stored on this device only, separately for each account.")
         }
     }
 
@@ -283,6 +305,9 @@ private struct AddAccountSheet: View {
                 TextField("Account name", text: $name)
                     .textInputAutocapitalization(.words)
                 SecureField("Password (min 4 characters)", text: $password)
+                Text("This creates a separate WhatsApp login for a new guard. Their checkpoints, schedule, and duty log stay entirely separate from every other account.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
 
                 if isSubmitting {
                     HStack {
@@ -293,7 +318,7 @@ private struct AddAccountSheet: View {
                 }
             }
             .keyboardDoneButton()
-            .navigationTitle("Add Session")
+            .navigationTitle("Add Guard")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

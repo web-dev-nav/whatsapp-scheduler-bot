@@ -9,7 +9,75 @@ Do not touch `server.js`, `scheduler.js`, n8n, or Tailscale/Docker config
 from this session. If iOS work seems to need a backend change, add it to
 "Needs from the backend session" below instead of making it yourself.
 
-## Bug fix: stale session token stuck the WhatsApp Session screen (latest)
+## Multi-guard support, detailed duty log, Host & Connection page (latest)
+
+User confirmed the real deployment model: a **shared device** (e.g. a
+guard-shack tablet), where different guards log into their own WhatsApp
+account and switch between them during a shift -- not one phone per guard.
+The server already had the right primitive for this (each `SchedulerAccount`
+is a fully independent WhatsApp session + `/api/config`), but the app's
+*local* data wasn't scoped per account at all: checkpoints, patrol history,
+dedupe state, and guard name all lived under fixed global keys. Guard B
+switching to their account would have seen Guard A's checkpoints and
+history -- confirmed as the actual bug behind "how would this work between
+multiple guards."
+
+- **Per-account local data (`AppState.swift`)**: checkpoints/history/dedupe
+  state now save/load under `"<key>.<accountId>"` instead of a fixed key
+  (`accountKey(_:)` helper). `guardName` moved off `@AppStorage` (can't be
+  keyed dynamically) to a plain `@Published` property persisted the same
+  way, with a `didSet` that saves under the *current* account's key.
+  `selectAccount(_:)` now calls `loadLocalData(for:)` alongside its existing
+  whatsAppState/patrolConfig/logs reload, and force-stops any active patrol
+  first (`stopPatrol()`) -- both because continuing a live patrol under a
+  different guard's identity mid-shift is unsafe/confusing, and because
+  `stopPatrol()`'s dedupe-state save must happen under the *old* account's
+  key before switching.
+- **One-time migration**: `migrateGlobalLocalDataToAccountIfNeeded()` copies
+  the old global-keyed data into whichever account is selected the first
+  time it runs (guarded by a `UserDefaults` flag), so existing users don't
+  lose their current checkpoints/history. Every other account starts empty,
+  correctly, since they're new guards. Old `@AppStorage("guardName")` was a
+  raw UserDefaults string (not `LocalJSONStore` JSON `Data` like the other
+  three keys) so it's migrated separately.
+- **Stayed global on purpose**: admin base URL, webhook URL, GPS accuracy/
+  cooldown thresholds -- these describe the device/network, not a guard's
+  identity, so one admin can tune them once for the shared device.
+- **Guard name field moved** from Preferences (now purely device-level) to
+  a new "This Guard" section in `WhatsAppSessionView` (`AccountTab.swift`),
+  since it's per-account now. Account hub copy updated throughout to make
+  "each account = a separate guard, with everything that implies" explicit
+  rather than implied ("Add Session" -> "Add Guard", footer text spelled
+  out exactly what switching swaps).
+- **Duty log detail (`ActivityTab.swift`)**: patrol events now group by day
+  (Today/Yesterday/date headers) and show the sending guard's name on every
+  row (`PatrolEvent.guardName`, already captured at send time -- just not
+  displayed before). Each event is now a `DisclosureGroup` exposing detail
+  that was already being stored but not surfaced: GPS coordinates, accuracy,
+  attempt count, last-attempt time, and the raw webhook/scheduler response.
+  The scheduler log section is honest about its limit: the server doesn't
+  return which account produced a line, so it's labeled with whichever
+  account is currently selected rather than pretending to know more.
+- **New Host & Connection page** (`HostStatusView.swift`, third row in the
+  Account hub): shows the configured admin/webhook URLs plus a live
+  reachability check (times a real request, reports HTTP status or the
+  specific failure) for each -- this is the in-app version of the `curl`
+  diagnosis used earlier this session to find the admin-Funnel TLS outage,
+  so a guard doesn't have to see a cryptic system alert with no actionable
+  detail. Also shows current account/guard/WhatsApp-status/chat-count in one
+  place. Has an honest "not available yet" section for engine version/
+  uptime/session count, which needs a backend endpoint (below) -- doesn't
+  fake data it doesn't have.
+
+Verified: `xcodebuild ... build` -> `BUILD SUCCEEDED`. Installed on the
+booted simulator and confirmed via screenshot: migration correctly carried
+the existing guard name into "Main"'s per-account namespace, Host &
+Connection row renders in the Account hub, and the updated footer copy
+shows. Could not tap through account-switching/duty-log grouping in the
+simulator (no Accessibility permission for `osascript`, no `idb`) -- worth a
+manual pass with two real test accounts to fully confirm isolation.
+
+## Bug fix: stale session token stuck the WhatsApp Session screen
 
 User reported Delete/Logout/Refresh all popping up "Enter a password" with no
 actual password field to enter it in. Root cause, confirmed by reading
@@ -501,6 +569,33 @@ been run yet, since that needs a physical device/simulator session against
 the live URL, not just a build check.
 
 ## Needs from the backend session
+
+- **Two additive endpoints for the iOS Host page and duty log** (both
+  low-risk, no changes to existing routes). Exact copy-pasteable prompt for
+  the backend session:
+
+  > Add two small read-only additions to `server.js`, both additive (no
+  > existing route/response shape changes):
+  >
+  > 1. `GET /api/health` — no auth required (matches `/api/whatsapp`'s
+  >    public-read pattern for status-only data). Returns JSON:
+  >    `{ ok: true, engineVersion, nodeVersion: process.version, uptimeSeconds: process.uptime(), serverTime: new Date().toISOString(), accounts: { total, connected } }`.
+  >    `engineVersion` from this repo's own `package.json` version.
+  >    `accounts.total` = length of `readAccounts()`; `accounts.connected` =
+  >    count of accounts with an active/ready WhatsApp client.
+  > 2. Add optional fields to each entry in `GET /api/logs`'s response:
+  >    `accountId` and `accountName` (whichever account produced that log
+  >    line), and `level` (`"info" | "warn" | "error"`, inferred from
+  >    existing log call sites). Keep the existing `message`/`label`/
+  >    `timestamp`/`type`/`id` fields unchanged — these are additions, not
+  >    replacements, so the current browser UI and iOS app keep working
+  >    unmodified if they ignore the new fields.
+  >
+  > Context: the iOS WatchPoint app added a Host & Connection diagnostics
+  > page and a per-guard duty log, and wants `/api/health` for real engine
+  > diagnostics (currently shows "not available yet") and the `/api/logs`
+  > fields to attribute log lines to the right guard/account instead of
+  > guessing from whichever account is currently selected client-side.
 
 - **Admin Funnel port (10000) TLS handshake is currently broken.**
   `https://hp-server.tailed5092.ts.net:10000` accepts the TCP connection but

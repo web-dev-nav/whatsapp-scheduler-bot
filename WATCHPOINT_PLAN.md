@@ -49,6 +49,16 @@ engine to check in.
     client-side (UI-layer) concern in both the browser (`patrol.html`) and
     WatchPoint (`LocalJSONStore`). Do not add server-side checkpoint
     storage as part of this plan.
+  - **Multi-guard model, as of 2026-08-16**: each `SchedulerAccount` *is* a
+    guard — its own WhatsApp login, `/api/config` (message/schedule), and
+    (as of the iOS-side change below) its own device-local checkpoints,
+    patrol history, and guard name. WatchPoint is designed for a **shared
+    device** (e.g. a guard-shack tablet) where multiple guards log into
+    their own account and switch between them; switching accounts swaps
+    every guard-specific thing at once and force-stops any active patrol.
+    Device-level settings (admin base URL, webhook URL, GPS accuracy/
+    cooldown thresholds) intentionally stay global/shared across accounts,
+    since they describe the device and network, not a guard's identity.
 - WatchPoint iOS app (`ios/WatchPoint/WatchPoint/`) already implements:
   - `SchedulerAdminAPI.swift` — matches the engine's account/whatsapp API
     contract exactly (login, poll `/api/whatsapp` every 4s in
@@ -199,3 +209,19 @@ user if Session A hasn't reported it yet, don't guess a port number.
   guard `/api/patrol/trigger`, given the two overlapping route handlers in
   `server.js`?
 - Session token expiry window (e.g. 24h? 7d?) — user preference.
+
+## Backend asks from the iOS session (2026-08-16)
+
+Not implemented here — the iOS session doesn't touch `server.js`. Both are
+additive/low-risk. Full copy-pasteable prompt for these lives in
+`ios/WatchPoint/IOS_SESSION_NOTES.md` under "Needs from the backend session."
+
+- **`GET /api/health`** — engine version, Node version, uptime, server time,
+  and active-account/connected-session counts. Powers the iOS Host &
+  Connection page's "Engine Diagnostics" section, which today just says
+  this isn't available.
+- **Structured `/api/logs` fields** — `accountId`/`accountName`, a `level`
+  (info/warn/error), and where applicable a WhatsApp `messageId` or sent
+  message preview, alongside the existing flattened `message`/`label`
+  strings. Powers a more detailed duty log (who/what/how) than the current
+  message string allows.

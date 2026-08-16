@@ -12,14 +12,30 @@ import SwiftUI
 
 @MainActor
 final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
+    // Device-level, not guard-level: these describe the network/hardware
+    // wiring, shared by whoever is using this device, not one guard's
+    // identity -- so they stay global rather than per-account.
     @AppStorage("webhookURL") var webhookURL = productionPatrolWebhookURL
     @AppStorage("schedulerAdminBaseURL") var schedulerAdminBaseURL = productionSchedulerAdminURL
     @AppStorage("selectedAdminAccountId") var selectedAdminAccountId = "main"
-    @AppStorage("guardName") var guardName = "navjot"
     @AppStorage("accuracyThresholdMeters") var accuracyThresholdMeters = 50.0
     @AppStorage("checkpointCooldownMinutes") var checkpointCooldownMinutes = 12.0
     @AppStorage("shiftIsActive") var shiftIsActive = false
 
+    /// Per-guard identity -- persisted per account (see `loadLocalData`),
+    /// not `@AppStorage`, since `@AppStorage` keys can't be composed
+    /// dynamically with the currently-selected account id.
+    @Published var guardName: String = "navjot" {
+        didSet {
+            guard oldValue != guardName else { return }
+            LocalJSONStore.save(guardName, accountKey("watchpoint.guardName"))
+        }
+    }
+
+    // Per-guard data: checkpoints, patrol history, and dedupe state all
+    // belong to whichever account/guard created them -- reloaded from
+    // storage on every account switch in `loadLocalData(for:)`, same as
+    // `whatsAppState`/`patrolConfig`/`logs` already are.
     @Published var checkpoints: [Checkpoint] = []
     @Published var history: [PatrolEvent] = []
     @Published var adminAccounts: [SchedulerAccount] = []
@@ -44,14 +60,53 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         locationManager.distanceFilter = 10
         locationAuthorization = locationManager.authorizationStatus
 
-        checkpoints = LocalJSONStore.load("watchpoint.checkpoints") ?? []
-        history = LocalJSONStore.load("watchpoint.history") ?? []
-        insideState = LocalJSONStore.load("watchpoint.insideState") ?? [:]
-        lastSentAtByCheckpoint = LocalJSONStore.load("watchpoint.lastSentAtByCheckpoint") ?? [:]
+        migrateGlobalLocalDataToAccountIfNeeded()
+        loadLocalData(for: selectedAdminAccountId)
     }
 
     var adminToken: String {
         KeychainStore.token(accountId: selectedAdminAccountId)
+    }
+
+    private func accountKey(_ base: String, accountId: String? = nil) -> String {
+        "\(base).\(accountId ?? selectedAdminAccountId)"
+    }
+
+    /// Loads checkpoints/history/dedupe-state/guard-name for the given
+    /// account -- called at launch and every time `selectAccount` switches
+    /// the active guard, so each guard only ever sees their own local data
+    /// on this shared device.
+    private func loadLocalData(for accountId: String) {
+        checkpoints = LocalJSONStore.load(accountKey("watchpoint.checkpoints", accountId: accountId)) ?? []
+        history = LocalJSONStore.load(accountKey("watchpoint.history", accountId: accountId)) ?? []
+        insideState = LocalJSONStore.load(accountKey("watchpoint.insideState", accountId: accountId)) ?? [:]
+        lastSentAtByCheckpoint = LocalJSONStore.load(accountKey("watchpoint.lastSentAtByCheckpoint", accountId: accountId)) ?? [:]
+        guardName = LocalJSONStore.load(accountKey("watchpoint.guardName", accountId: accountId)) ?? "navjot"
+    }
+
+    private static let localDataMigratedKey = "watchpoint.localDataMigratedToPerAccount"
+
+    /// One-time migration: before per-account scoping, checkpoints/history/
+    /// dedupe-state/guard-name were all stored under fixed global keys.
+    /// Whichever account is selected the first time this runs (i.e. the one
+    /// already in use) keeps that existing data; every other account starts
+    /// empty, which is correct since they're new guards. The old
+    /// `@AppStorage("guardName")` value was a raw UserDefaults string, not
+    /// `LocalJSONStore` JSON `Data` like the other three keys, so it's
+    /// migrated separately.
+    private func migrateGlobalLocalDataToAccountIfNeeded() {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: Self.localDataMigratedKey) else { return }
+
+        for legacyKey in ["watchpoint.checkpoints", "watchpoint.history", "watchpoint.insideState", "watchpoint.lastSentAtByCheckpoint"] {
+            if let data = defaults.data(forKey: legacyKey) {
+                defaults.set(data, forKey: accountKey(legacyKey))
+            }
+        }
+        if let legacyGuardName = defaults.string(forKey: "guardName") {
+            LocalJSONStore.save(legacyGuardName, accountKey("watchpoint.guardName"))
+        }
+        defaults.set(true, forKey: Self.localDataMigratedKey)
     }
 
     /// Shows an alert for a real failure, but swallows cancellation --
@@ -190,7 +245,7 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     func saveCheckpoints() {
-        LocalJSONStore.save(checkpoints, "watchpoint.checkpoints")
+        LocalJSONStore.save(checkpoints, accountKey("watchpoint.checkpoints"))
     }
 
     func manualTrigger(_ checkpoint: Checkpoint) async {
@@ -286,10 +341,18 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
-    /// Switches the active account and reloads everything scoped to it --
-    /// WhatsApp status, schedule config, and logs are all per-account.
+    /// Switches the active account/guard and reloads everything scoped to
+    /// it -- WhatsApp status, schedule config, and logs are server-side
+    /// per-account; checkpoints, patrol history, dedupe state, and guard
+    /// name are device-local per-account (`loadLocalData`). Force-stops any
+    /// active patrol first: continuing a live patrol under a different
+    /// guard's identity mid-shift is unsafe and confusing, and saving
+    /// dedupe state must happen under the *old* account's key before we
+    /// switch, which `stopPatrol()` already does.
     func selectAccount(_ accountId: String) async {
+        stopPatrol()
         selectedAdminAccountId = accountId
+        loadLocalData(for: accountId)
         whatsAppState = nil
         patrolConfig = nil
         logs = []
@@ -512,11 +575,11 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     private func saveHistory() {
-        LocalJSONStore.save(Array(history.prefix(200)), "watchpoint.history")
+        LocalJSONStore.save(Array(history.prefix(200)), accountKey("watchpoint.history"))
     }
 
     private func saveDedupeState() {
-        LocalJSONStore.save(insideState, "watchpoint.insideState")
-        LocalJSONStore.save(lastSentAtByCheckpoint, "watchpoint.lastSentAtByCheckpoint")
+        LocalJSONStore.save(insideState, accountKey("watchpoint.insideState"))
+        LocalJSONStore.save(lastSentAtByCheckpoint, accountKey("watchpoint.lastSentAtByCheckpoint"))
     }
 }

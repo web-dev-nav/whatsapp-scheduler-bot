@@ -2,9 +2,11 @@
 //  PreferencesView.swift
 //  WatchPoint
 //
-//  Device-only knobs with no browser equivalent -- pushed from the Account
-//  hub. Account/session management lives in WhatsAppSessionView instead;
-//  this screen is purely local preferences.
+//  Device-level knobs shared by whichever guard is using this device --
+//  pushed from the Account hub. Deliberately does NOT include guard name,
+//  which is per-account/per-guard and lives in WhatsAppSessionView instead
+//  (see AppState.guardName). This screen only holds things that describe
+//  the device/network, not a guard's identity.
 //
 
 import SwiftUI
@@ -14,11 +16,6 @@ struct PreferencesView: View {
 
     var body: some View {
         Form {
-            Section("Guard") {
-                TextField("Guard name", text: $appState.guardName)
-                    .textInputAutocapitalization(.never)
-            }
-
             Section("Scheduler Admin") {
                 TextField("Admin base URL", text: $appState.schedulerAdminBaseURL)
                     .keyboardType(.URL)
