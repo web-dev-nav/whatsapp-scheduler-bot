@@ -9,7 +9,35 @@ Do not touch `server.js`, `scheduler.js`, n8n, or Tailscale/Docker config
 from this session. If iOS work seems to need a backend change, add it to
 "Needs from the backend session" below instead of making it yourself.
 
-## Navigation redesign #3: 5 tabs -> 3, proper information architecture (latest)
+## Bug fix: stale session token stuck the WhatsApp Session screen (latest)
+
+User reported Delete/Logout/Refresh all popping up "Enter a password" with no
+actual password field to enter it in. Root cause, confirmed by reading
+`server.js:119-155`: session tokens live in memory only and are wiped by any
+engine restart (which is exactly what happened during the admin-Funnel outage
+above) or expire after `SESSION_TOKEN_TTL_HOURS`; the server correctly
+replies `401 "Enter the password for ..."`, but `AppState` only checked
+whether a token was *present* in Keychain, never whether the server still
+accepted it. A stale-but-present token left the UI permanently showing the
+"connected" controls (Refresh/Logout/Remove) with no path back to the
+password field -- every tap just re-surfaced the same dead-end error.
+
+Fixed in `AppState.swift`'s `presentError(_:)` (used by every authorized
+call) and `fetchLogs()` (which swallows errors without alerting): on a 401,
+clear the Keychain token for the current account before showing the alert,
+so the next render's `adminToken.isEmpty` check is true again and the view
+falls back to the login field on its own -- no new UI/state needed, just
+correcting what "connected" means to check server-side validity, not just
+local presence.
+
+Verified: `xcodebuild ... build` -> `BUILD SUCCEEDED`. Confirmed via a live
+`curl` against `hp-server:10000` that the account-list fetch now succeeds
+end-to-end once the backend session's Funnel-persistence fix
+(`tailscale-admin-funnel.service`) landed. Could not tap through the actual
+login/refresh/remove flow in this session (no Accessibility permission for
+`osascript`, no `idb` installed) -- worth a manual pass to fully confirm.
+
+## Navigation redesign #3: 5 tabs -> 3, proper information architecture
 
 The 5-tab layout (Connect, Setup, Patrol, Activity, Settings) from redesign #2
 mirrored how the *code*/API is organized (one screen per admin endpoint)

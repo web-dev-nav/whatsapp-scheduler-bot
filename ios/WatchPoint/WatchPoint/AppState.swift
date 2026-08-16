@@ -61,9 +61,23 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// previous call finishes). That's expected, not an error, and
     /// surfacing it as "WatchPoint: cancelled" just confused whether
     /// something had actually gone wrong.
+    ///
+    /// A 401 here means the server rejected our stored session token --
+    /// expired (`SESSION_TOKEN_TTL_HOURS`) or wiped by an engine restart,
+    /// since `server.js` keeps sessions in memory only. Before this, the app
+    /// only checked whether a token was *present* in Keychain, not whether
+    /// the server still considered it valid, so a stale token left the UI
+    /// stuck showing "connected" controls (Refresh/Logout/Remove) forever --
+    /// every tap just re-surfaced the same "Enter the password for ..."
+    /// error with no way to actually reach a password field. Clearing the
+    /// token here means the next render's `adminToken.isEmpty` check is
+    /// true again, so the view falls back to the login field on its own.
     private func presentError(_ error: Error) {
         if error is CancellationError { return }
         if let urlError = error as? URLError, urlError.code == .cancelled { return }
+        if case let SchedulerAdminError.http(status, _) = error, status == 401 {
+            KeychainStore.clearToken(accountId: selectedAdminAccountId)
+        }
         alertMessage = error.localizedDescription
     }
 
@@ -349,7 +363,11 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         do {
             logs = try await api.logs()
         } catch {
-            // Activity log is a nice-to-have; don't surface an alert for it.
+            // Activity log is a nice-to-have; don't surface an alert for it,
+            // but still drop a stale token on 401 -- see presentError.
+            if case let SchedulerAdminError.http(status, _) = error, status == 401 {
+                KeychainStore.clearToken(accountId: selectedAdminAccountId)
+            }
         }
     }
 
