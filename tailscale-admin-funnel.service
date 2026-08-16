@@ -1,0 +1,18 @@
+[Unit]
+Description=WatchPoint admin API on Tailscale Funnel HTTPS :10000
+Wants=network-online.target
+Requires=tailscaled.service whatsapp-scheduler.service n8n-tailscale.service
+After=network-online.target tailscaled.service whatsapp-scheduler.service n8n-tailscale.service
+PartOf=n8n-tailscale.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+ExecStartPre=/bin/bash -lc 'for attempt in {1..24}; do /usr/bin/tailscale ip -4 >/dev/null 2>&1 && exit 0; sleep 5; done; echo "tailscale did not become ready in time" >&2; exit 1'
+ExecStartPre=/bin/bash -lc 'for attempt in {1..24}; do /usr/bin/curl --fail --silent --output /dev/null http://127.0.0.1:3000/ && exit 0; sleep 5; done; echo "WatchPoint admin API did not become ready in time" >&2; exit 1'
+ExecStart=/usr/bin/flock -w 60 /run/tailscale-serve.lock /usr/bin/tailscale funnel --bg --yes --https=10000 http://127.0.0.1:3000
+ExecStop=/usr/bin/flock -w 60 /run/tailscale-serve.lock /usr/bin/tailscale funnel --https=10000 off
+
+[Install]
+WantedBy=multi-user.target
