@@ -14,3 +14,4 @@ accounts/
 *.xcuserstate
 xcuserdata/
 **/xcuserdata/
+.claude/settings.local.json

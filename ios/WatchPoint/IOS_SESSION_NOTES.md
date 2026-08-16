@@ -9,7 +9,65 @@ Do not touch `server.js`, `scheduler.js`, n8n, or Tailscale/Docker config
 from this session. If iOS work seems to need a backend change, add it to
 "Needs from the backend session" below instead of making it yourself.
 
-## Draggable radius handle on the map (latest)
+## Navigation redesign #3: 5 tabs -> 3, proper information architecture (latest)
+
+The 5-tab layout (Connect, Setup, Patrol, Activity, Settings) from redesign #2
+mirrored how the *code*/API is organized (one screen per admin endpoint)
+rather than how a guard actually uses the app in the field: patrol execution
+is the everyday, primary flow; WhatsApp session, schedule, and device
+preferences are rare, config-time flows that don't deserve permanent
+bottom-bar real estate. Confirmed against Apple's own tab-bar guidance and
+how real guard-tour apps (Guard1/TrackTik-style) are structured before
+changing anything, rather than restructuring on a hunch.
+
+Restructured to 3 top-level tabs via a new `AppTab` enum:
+
+- **Patrol** (home, default tab) — status hero (Start/Stop, live state, now
+  also "Sending as {account}" and a WhatsApp-not-ready banner with a "Fix"
+  button that jumps to Account), map, checkpoint list. Same underlying logic
+  as before (radius drag, tap-to-add, etc. all untouched) — only the shell
+  and status panel changed.
+- **Activity** — unchanged, moved as-is.
+- **Account** — new hub tab: a `List` whose rows push full-screen
+  destinations instead of being separate tabs — WhatsApp Session (old
+  Connect tab body, `NavigationStack` removed since it's now pushed),
+  Message & Schedule (old Setup tab body, same treatment), and Preferences
+  (old Settings tab, trimmed down to device-only knobs now that account
+  switching lives under WhatsApp Session instead).
+
+App now lands on Account when logged out (`appState.adminToken.isEmpty`,
+checked once in `.onAppear`) instead of dropping a first-time user on an
+empty map, and switches to Patrol as the default once a session exists.
+
+Split the monolithic `ContentView.swift` (~1250 lines, had already hit a
+real "compiler unable to type-check in reasonable time" error once from
+being too big) into one file per screen: `PatrolTab.swift`,
+`AccountTab.swift`, `SetupView.swift`, `PreferencesView.swift`,
+`ActivityTab.swift`, `SharedViews.swift` (EventRow, WhatsAppConnectionRow,
+`UIImage(dataURL:)`, `panel()`/`keyboardDoneButton()` helpers).
+`ContentView.swift` is now just the `TabView` shell + `AppTab` enum + default
+tab logic. The project uses Xcode's file-system-synchronized groups, so new
+files needed no `project.pbxproj` changes.
+
+Pure view-layer restructuring — no changes to `AppState.swift` or
+`SchedulerAdminAPI.swift`, all existing state/API calls reused as-is.
+
+Verified with `xcodebuild ... build` → `BUILD SUCCEEDED`. Installed and
+launched on a booted iPhone 17 Simulator; screenshot confirmed 3 tabs, the
+logged-out-lands-on-Account behavior, and the Account hub rendering
+correctly. Could not verify with automated taps (`osascript` lacks
+Accessibility permission in this environment) -- pushed-screen navigation
+(no double nav bars), the not-ready banner, and Patrol-becomes-default once
+connected still need a manual on-device/simulator pass.
+
+While testing, hit an unrelated infra issue: the production admin URL
+(`https://hp-server.tailed5092.ts.net:10000`) fails its TLS handshake
+(`SSL_ERROR_SYSCALL` — TCP connects, TLS reset) while the host's other
+Funnel port (443, n8n) responds fine. This is a backend/Tailscale Funnel
+problem on `hp-server`, not an iOS bug -- flagged below, not fixed here per
+the "don't touch Tailscale/Docker config" boundary.
+
+## Draggable radius handle on the map
 
 User asked for a way to freely adjust a checkpoint's radius directly on
 the map, rather than only via the `Stepper` in the list or the `Slider`
@@ -416,6 +474,14 @@ the live URL, not just a build check.
 
 ## Needs from the backend session
 
+- **Admin Funnel port (10000) TLS handshake is currently broken.**
+  `https://hp-server.tailed5092.ts.net:10000` accepts the TCP connection but
+  fails the TLS handshake (`SSL_ERROR_SYSCALL`), while the same host's other
+  Funnel port (443, n8n) works fine. This means the iOS app currently cannot
+  reach the admin API at all ("a TLS error caused the secure connection to
+  fail" in-app). Likely `tailscale funnel --bg 10000` needs to be re-armed on
+  `hp-server`, or the engine process behind it has died. Needs checking
+  directly on the home server -- no shell access to it from this session.
 - **WhatsApp pairing-code login** (real fix for the QR-can't-scan-itself
   problem above): a new endpoint that calls
   `client.requestPairingCode(phoneNumber)` (supported by `whatsapp-web.js`)
