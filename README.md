@@ -304,3 +304,16 @@ For an end-to-end release, verify:
 The iOS Host & Connection screen currently performs real reachability checks but cannot show engine uptime or session totals. A future read-only `GET /api/health` endpoint should provide engine version, Node version, uptime, server time, and total/connected account counts.
 
 Scheduler log entries currently expose flattened display strings. Future optional `accountId`, `accountName`, `level`, and message metadata fields would allow the iOS duty log to attribute server events without inferring from the selected account.
+
+## Planned iOS Additions
+
+WatchPoint's shared-device, multi-guard model (see Architecture) raises two gaps not yet addressed:
+
+- **App lock.** The device holds multiple guards' WhatsApp sessions, checkpoints, and history behind Keychain tokens that do not expire from the device's perspective. Nothing today stops anyone who picks up the device from seeing all of it. Planned: a Face ID/passcode gate on launch and on returning from background (`LocalAuthentication`, with device-passcode fallback), toggleable in Preferences and on by default for shared-device deployments.
+- **Shift-change reconfirmation.** Nothing prompts a guard to confirm their identity when picking the device back up after a while, so a guard could unknowingly patrol under the previous guard's account if nobody remembered to switch. Planned: track a per-account "last confirmed" timestamp, and prompt ("Still {guard} on {account}? Yes / Switch Guard") on the Patrol tab if it's been more than a few hours since the account was last selected or confirmed.
+
+Also recommended, but dependent on backend changes and out of scope for the iOS-only session:
+
+- **Persist session tokens server-side** (not just in memory) so guards aren't logged out mid-shift by an unrelated engine restart or deploy — this already caused one dead-end-UI bug (see git history).
+- **WhatsApp pairing-code login** (`client.requestPairingCode`) as the real fix for "can't scan a QR on the same phone you're reading it on," instead of the current QR-only flow.
+- **Invite-link account creation**: a single-use, time-limited token generated server-side that, opened in WatchPoint via a deep link, creates a new guard's account automatically instead of typing a name/password into "Add Guard" — best paired with pairing-code login above so the whole onboarding flow works from one device.
