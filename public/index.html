@@ -48,25 +48,54 @@
             <span>Patrol Scheduler</span>
           </div>
           <div class="account-area">
-            <button class="account-chip" id="accountMenuButton" type="button" aria-expanded="false">
+            <button class="account-chip" id="accountMenuButton" type="button" aria-expanded="false" aria-controls="accountMenu">
               <span class="dot dot-ok" id="connectionDot"></span>
-              <span id="accountChipName">main</span>
-              <span class="chip-caret">▾</span>
+              <span class="account-chip-copy">
+                <small>Account</small>
+                <strong id="accountChipName">main</strong>
+              </span>
+              <span class="account-chip-action">Manage</span>
             </button>
-            <div class="account-menu" id="accountMenu" hidden>
-              <p class="menu-status" id="whatsappStatus">Connected</p>
-              <label class="field">
-                <span>Sending account</span>
-                <select id="accountSelect"></select>
-              </label>
-              <div class="account-list" id="accountList" aria-label="Saved accounts"></div>
-              <form class="inline-add" id="accountForm">
-                <input id="accountName" type="text" autocomplete="off" placeholder="Add another account" />
-                <input id="accountPassword" type="password" autocomplete="new-password" placeholder="Password" minlength="4" />
-                <button class="btn btn-ghost" type="submit">Add</button>
-              </form>
-              <button class="btn btn-danger-ghost" id="logoutWhatsapp" type="button">Log out this account</button>
-              <button class="btn btn-danger-ghost" id="deleteAccount" type="button">Remove this account</button>
+
+            <div class="account-manager-backdrop" id="accountMenu" hidden>
+              <section class="account-manager" role="dialog" aria-modal="true" aria-labelledby="accountManagerTitle">
+                <div class="account-manager-head">
+                  <div>
+                    <h2 id="accountManagerTitle">WhatsApp accounts</h2>
+                    <p class="menu-status" id="whatsappStatus">Connected</p>
+                  </div>
+                  <button class="dialog-close" id="accountMenuClose" type="button" aria-label="Close account manager">✕</button>
+                </div>
+
+                <div class="account-manager-section">
+                  <div class="section-label">
+                    <strong>Your accounts</strong>
+                    <small>Tap an account to switch</small>
+                  </div>
+                  <div class="account-list" id="accountList" aria-label="Saved accounts"></div>
+                </div>
+
+                <div class="account-manager-section add-account-section">
+                  <div class="section-label">
+                    <strong>Add another account</strong>
+                    <small>Connect a separate WhatsApp phone</small>
+                  </div>
+                  <form class="account-add-form" id="accountForm">
+                    <label class="field">
+                      <span>Account name</span>
+                      <input id="accountName" type="text" autocomplete="off" placeholder="e.g. Night shift phone" required />
+                    </label>
+                    <label class="field">
+                      <span>Password</span>
+                      <input id="accountPassword" type="password" autocomplete="new-password" placeholder="At least 4 characters" minlength="4" required />
+                    </label>
+                    <button class="btn btn-primary" type="submit">＋ Add account</button>
+                  </form>
+                  <p class="account-feedback" id="accountFeedback" aria-live="polite"></p>
+                </div>
+
+                <button class="btn btn-danger-ghost btn-block" id="logoutWhatsapp" type="button">Log out current WhatsApp session</button>
+              </section>
             </div>
           </div>
         </header>

@@ -30,16 +30,16 @@ const loginAccountPassword = el('loginAccountPassword');
 // --- Header / account menu ---
 const accountMenuButton = el('accountMenuButton');
 const accountMenu = el('accountMenu');
+const accountMenuClose = el('accountMenuClose');
 const accountChipName = el('accountChipName');
 const connectionDot = el('connectionDot');
 const whatsappStatus = el('whatsappStatus');
-const accountSelect = el('accountSelect');
 const accountList = el('accountList');
 const accountForm = el('accountForm');
 const accountName = el('accountName');
 const accountPassword = el('accountPassword');
+const accountFeedback = el('accountFeedback');
 const logoutWhatsapp = el('logoutWhatsapp');
-const deleteAccountButton = el('deleteAccount');
 
 // --- Dashboard ---
 const summaryBadge = el('summaryBadge');
@@ -381,13 +381,21 @@ function renderAccountList() {
     selectButton.className = 'account-row-select';
     selectButton.type = 'button';
     selectButton.dataset.accountId = account.id;
-    selectButton.textContent = account.name;
+    selectButton.innerHTML = `
+      <span class="account-avatar">${escapeHtml(account.name.slice(0, 1).toUpperCase())}</span>
+      <span class="account-row-copy">
+        <strong>${escapeHtml(account.name)}</strong>
+        <small>${account.id === currentAccountId ? 'Currently active' : 'Tap to switch'}</small>
+      </span>
+      ${account.id === currentAccountId ? '<span class="current-badge">Active</span>' : ''}
+    `;
 
     const removeButton = document.createElement('button');
     removeButton.className = 'account-row-remove';
     removeButton.type = 'button';
     removeButton.dataset.accountId = account.id;
-    removeButton.textContent = account.id === 'main' ? 'Protected' : 'Remove';
+    removeButton.textContent = account.id === 'main' ? 'Main account' : 'Remove';
+    removeButton.setAttribute('aria-label', `Remove ${account.name}`);
     removeButton.disabled = account.id === 'main';
 
     row.append(selectButton, removeButton);
@@ -396,7 +404,7 @@ function renderAccountList() {
 }
 
 function renderAccountOptions() {
-  [accountSelect, loginAccountSelect].forEach((select) => {
+  [loginAccountSelect].forEach((select) => {
     select.innerHTML = '';
     accounts.forEach((account) => {
       const option = document.createElement('option');
@@ -408,8 +416,11 @@ function renderAccountOptions() {
   });
   renderAccountList();
   accountChipName.textContent = currentAccountName();
-  deleteAccountButton.disabled = currentAccountId === 'main';
-  deleteAccountButton.textContent = currentAccountId === 'main' ? 'Main account cannot be removed' : 'Remove this account';
+}
+
+function setAccountFeedback(text, type = '') {
+  accountFeedback.textContent = text;
+  accountFeedback.className = type ? `account-feedback ${type}` : 'account-feedback';
 }
 
 async function loadAccounts() {
@@ -461,8 +472,7 @@ async function deleteAccountById(accountId) {
     return;
   }
 
-  deleteAccountButton.disabled = true;
-  deleteAccountButton.textContent = 'Removing...';
+  setAccountFeedback(`Removing "${accountNameToDelete}"…`);
 
   const response = await fetchWithAccountAuth(`/api/accounts?account=${encodeURIComponent(accountId)}`, {
     method: 'DELETE',
@@ -479,13 +489,9 @@ async function deleteAccountById(accountId) {
   }
   localStorage.setItem('currentAccountId', currentAccountId);
   renderAccountOptions();
-  closeAccountMenu();
+  setAccountFeedback(`Removed "${accountNameToDelete}".`, 'success');
   setSaveStatus(`Removed "${accountNameToDelete}".`, 'success');
   await switchToCurrentAccount();
-}
-
-async function deleteCurrentAccount() {
-  await deleteAccountById(currentAccountId);
 }
 
 async function switchToCurrentAccount() {
@@ -527,11 +533,15 @@ async function switchAccount(accountId) {
 function openAccountMenu() {
   accountMenu.hidden = false;
   accountMenuButton.setAttribute('aria-expanded', 'true');
+  document.body.classList.add('dialog-open');
+  setAccountFeedback('');
+  accountMenuClose.focus();
 }
 
 function closeAccountMenu() {
   accountMenu.hidden = true;
   accountMenuButton.setAttribute('aria-expanded', 'false');
+  document.body.classList.remove('dialog-open');
 }
 
 // ---------- Chat combo ----------
@@ -1374,16 +1384,22 @@ chatComboMenu.addEventListener('click', (event) => {
 
 document.addEventListener('click', (event) => {
   if (!chatCombo.contains(event.target)) closeChatMenu();
-  if (!accountMenu.contains(event.target) && !accountMenuButton.contains(event.target)) closeAccountMenu();
 });
 
-// ---------- Events: account menu ----------
+// ---------- Events: account manager ----------
 accountMenuButton.addEventListener('click', () => {
-  if (accountMenu.hidden) openAccountMenu();
-  else closeAccountMenu();
+  openAccountMenu();
 });
 
-[accountSelect, loginAccountSelect].forEach((select) => {
+accountMenuClose.addEventListener('click', closeAccountMenu);
+accountMenu.addEventListener('click', (event) => {
+  if (event.target === accountMenu) closeAccountMenu();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !accountMenu.hidden) closeAccountMenu();
+});
+
+[loginAccountSelect].forEach((select) => {
   select.addEventListener('change', () => {
     switchAccount(select.value).catch((error) => {
       setSaveStatus(error.message, 'error');
@@ -1398,6 +1414,7 @@ accountList.addEventListener('click', (event) => {
 
   if (removeButton) {
     deleteAccountById(removeButton.dataset.accountId).catch((error) => {
+      setAccountFeedback(error.message, 'error');
       setSaveStatus(error.message, 'error');
       renderAccountOptions();
     });
@@ -1405,18 +1422,25 @@ accountList.addEventListener('click', (event) => {
   }
 
   if (selectButton) {
-    switchAccount(selectButton.dataset.accountId).catch((error) => setSaveStatus(error.message, 'error'));
+    switchAccount(selectButton.dataset.accountId).catch((error) => {
+      setAccountFeedback(error.message, 'error');
+      setSaveStatus(error.message, 'error');
+    });
   }
 });
 
 accountForm.addEventListener('submit', (event) => {
   event.preventDefault();
+  setAccountFeedback('Adding account…');
   addAccount(accountName.value, accountPassword.value)
     .then(() => {
       accountName.value = '';
       accountPassword.value = '';
     })
-    .catch((error) => setSaveStatus(error.message, 'error'));
+    .catch((error) => {
+      setAccountFeedback(error.message, 'error');
+      setSaveStatus(error.message, 'error');
+    });
 });
 
 loginAccountForm.addEventListener('submit', (event) => {
@@ -1435,14 +1459,6 @@ logoutWhatsapp.addEventListener('click', () => {
   logoutWhatsappSession().catch((error) => {
     loginStatus.textContent = error.message;
     logoutWhatsapp.disabled = false;
-  });
-});
-
-deleteAccountButton.addEventListener('click', () => {
-  deleteCurrentAccount().catch((error) => {
-    setSaveStatus(error.message, 'error');
-    deleteAccountButton.disabled = currentAccountId === 'main';
-    renderAccountOptions();
   });
 });
 

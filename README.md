@@ -1,484 +1,306 @@
-# WhatsApp Patrol Scheduler
+# WatchPoint
 
-Local WhatsApp patrol scheduler with a browser UI, QR login, schedule preview, and live scheduler logs.
+WatchPoint is a WhatsApp patrol platform with two clearly separated parts:
 
-This project uses `whatsapp-web.js`, which automates WhatsApp Web through a linked-device session. It is not the official WhatsApp Business API.
+- **Scheduler API** — a continuously running Node.js service that owns WhatsApp sessions, accounts, schedules, logs, and message delivery.
+- **WatchPoint for iOS** — the primary user interface for connecting accounts, configuring messages and schedules, managing checkpoints, and running patrols.
 
-## Installation
+The Node service is the only component that communicates with WhatsApp. The iOS app never embeds WhatsApp Web or sends WhatsApp messages directly.
 
-### 1. Install Requirements
+WatchPoint supports a shared-device, multi-guard workflow. Each Scheduler account represents one guard and has its own WhatsApp session, schedule, checkpoints, patrol history, deduplication state, and guard name. Switching accounts stops any active patrol before loading the next guard's data. Network URLs and GPS thresholds remain device-wide settings.
 
-Install these first:
+> This project uses `whatsapp-web.js`, which automates a linked WhatsApp Web session. It is not the official WhatsApp Business API.
 
-- Node.js `18` or newer
-- npm, included with Node.js
-- Google Chrome or Chromium, used by `whatsapp-web.js`
-- A WhatsApp account that can access the target group or chat
-- A computer/server that stays awake and online while the scheduler is running
-
-Check Node.js:
-
-```bash
-node -v
-npm -v
-```
-
-This project supports Node versions:
+## Architecture
 
 ```text
->=18 <27
+                               Admin API
+WatchPoint iOS  ──────────────────────────────────┐
+  • accounts                                      │
+  • WhatsApp QR/status                            ▼
+  • message and schedule                 Scheduler API (Node.js)
+  • activity                             • account authentication
+                                         • WhatsApp Web sessions
+WatchPoint iOS                            • schedule engine
+  • GPS checkpoints                      • send guards and logs
+  • patrol events                                 │
+         │                                         ▼
+         └── HTTPS ──> n8n webhook ──> patrol API ──> WhatsApp
 ```
 
-### 2. Download The Repo
-
-Clone the repo:
-
-```bash
-git clone git@github-personal:web-dev-nav/whatsapp-scheduler-bot.git
-cd whatsapp-scheduler-bot
-```
-
-Or, if the repo is already on your computer:
-
-```bash
-cd /Users/navjotsingh/Github/whatsapp-scheduler-bot
-git pull
-```
-
-### 3. Install Dependencies
-
-```bash
-npm install
-```
-
-### 4. Optional Environment Settings
-
-The app works without a `.env` file for local use. By default it runs on:
+The iOS app currently defaults to:
 
 ```text
-http://127.0.0.1:3000
+Admin API:     https://hp-server.tailed5092.ts.net:10000
+Patrol webhook: https://hp-server.tailed5092.ts.net/webhook/patrol-test
 ```
 
-For a normal local install, you can skip this step.
+Both URLs can be changed from the app's Preferences screen.
 
-If you plan to expose the app through Tailscale Funnel, ngrok, Cloudflare Tunnel, Forge, or any public URL, set a patrol token so random visitors cannot trigger WhatsApp messages:
+## Repository Layout
 
-```bash
-PATROL_TOKEN=change-this-token npm run ui
+```text
+server.js                         HTTP API and WhatsApp runtimes
+scheduler.js                      Config normalization and schedule generation
+config.json                       Legacy/main-account configuration
+public/                           Optional browser admin interface
+n8n/                              Patrol webhook workflow export
+ios/WatchPoint/                   Native SwiftUI application
+ios/WatchPoint/WatchPoint/
+  SchedulerAdminAPI.swift         API client and Keychain token storage
+  AppState.swift                  App state, GPS, accounts, config, and logs
+  AccountTab.swift                Account and WhatsApp connection UI
+  SetupView.swift                 Message and schedule UI
+  PatrolTab.swift                 Map, checkpoints, and active patrol UI
+  ActivityTab.swift               Patrol and scheduler activity UI
+  HostStatusView.swift             Host reachability and connection diagnostics
 ```
 
-You can also create a `.env` file:
+## Scheduler API
+
+### Requirements
+
+- Node.js 18–26
+- npm
+- Chrome or Chromium
+- A machine that remains powered on while messages are scheduled
+
+### Install and Run
 
 ```bash
-HOST=127.0.0.1
-PORT=3000
-PATROL_TOKEN=change-this-token
-```
-
-The token is only needed for the GPS patrol webhook. When `PATROL_TOKEN` is set, enter the same value in the **Patrol webhook token** field on `/patrol.html`.
-
-### 5. Start The App
-
-```bash
+npm ci
 npm run ui
 ```
 
-Open:
+The default listener is:
 
 ```text
 http://127.0.0.1:3000
 ```
 
-`npm run ui` starts the browser UI, WhatsApp connection, scheduled sender, and GPS patrol webhook in one process.
+Use a `.env` file for production:
 
-### 6. Link WhatsApp
+```dotenv
+HOST=127.0.0.1
+PORT=3000
+DATA_DIR=/home/navjot/.whatsapp-scheduler-bot
+SESSION_TOKEN_TTL_HOURS=24
+PATROL_TOKEN=replace-with-a-long-random-secret
 
-If WhatsApp is not linked yet, the UI shows a QR code.
-
-On your phone:
-
-```text
-WhatsApp > Settings > Linked Devices > Link a Device
+# Set only when Chrome is not found automatically.
+# CHROME_EXECUTABLE_PATH=/usr/bin/google-chrome
 ```
 
-Scan the QR code shown by the app. After linking, the app will load your WhatsApp chats and groups.
+`PATROL_TOKEN` and `PATROL_TRIGGER_TOKEN` are accepted interchangeably. Prefer setting only `PATROL_TOKEN` so there is one unambiguous patrol secret.
 
-### 7. Configure The Scheduler
+### API Authentication
 
-In the browser UI:
+Each WhatsApp account has its own password. After login, the API returns a temporary session token. Send it on protected requests:
 
-1. Choose the WhatsApp group or chat.
-2. Set the message text.
-3. Choose the shift days and shift time.
-4. Turn automatic sending on or off.
-5. Save the setup.
-
-Use the schedule preview and activity log to confirm the setup.
-
-### 8. Use GPS Patrol Mode
-
-Open:
-
-```text
-http://127.0.0.1:3000/patrol.html
+```http
+X-Account-Auth: <session-token>
 ```
 
-Then:
+Tokens expire after `SESSION_TOKEN_TTL_HOURS`, which defaults to 24 hours. They are held in memory, so restarting the API also invalidates them. The iOS app stores tokens in the device Keychain and returns to the password screen when a token is rejected.
 
-1. Select the sending account.
-2. Enter the patrol webhook token if you started the app with `PATROL_TOKEN`.
-3. Tap the map or use **Drop at my location** to add checkpoints.
-4. Set the radius for each checkpoint.
-5. Click **Save checkpoints**.
-6. Click **Test connection (dry run — no message)**.
-7. Click **Start live patrol** when you are ready.
+Login is limited to five failed attempts per account and IP in 15 minutes, followed by a 15-minute lockout.
 
-When the phone enters a checkpoint circle, the server sends the saved WhatsApp patrol message.
+### Endpoints
 
-### 9. iPhone And Tailscale Funnel Setup
+| Method | Path | Authentication | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/accounts` | None | List accounts |
+| `POST` | `/api/accounts` | None | Create an account and password |
+| `POST` | `/api/accounts/auth` | Password in body | Create a session token |
+| `POST` | `/api/accounts/password` | Conditional | Set or change an account password |
+| `DELETE` | `/api/accounts?account=<id>` | Account token | Remove a non-main account and its data |
+| `GET` | `/api/whatsapp?account=<id>` | Account token | Get status, QR image, and chats |
+| `POST` | `/api/whatsapp/logout?account=<id>` | Account token | Unlink the WhatsApp session |
+| `GET` | `/api/config?account=<id>` | Account token | Read message and schedule configuration |
+| `PUT` | `/api/config?account=<id>` | Account token | Save message and schedule configuration |
+| `POST` | `/api/config/preview` | None | Preview a proposed schedule without saving |
+| `GET` | `/api/logs?account=<id>` | Account token | Read scheduler activity |
+| `POST` | `/api/patrol/trigger` | Patrol token or account token | Trigger a guarded patrol message |
 
-Your iPhone cannot use your home Mac's `127.0.0.1` address. For real patrol use from a home Mac, expose the app with HTTPS.
+### Account Example
 
-Example with Tailscale Funnel:
+Create an account:
 
 ```bash
-PATROL_TOKEN=change-this-token npm run ui
-```
-
-In another terminal:
-
-```bash
-tailscale funnel 3000
-```
-
-Open the HTTPS Funnel URL on your iPhone:
-
-```text
-https://your-mac-name.your-tailnet.ts.net/patrol.html
-```
-
-Enter the same patrol token in the page. Then run the dry-run test.
-
-Important iPhone notes:
-
-- iPhone Safari requires HTTPS for GPS on non-localhost pages.
-- Keep the Patrol Mode page open and the phone awake during live patrol.
-- If you want background triggering with the screen off, use iPhone Shortcuts automation with the webhook URL.
-
-### 10. Verify The Install
-
-Run the syntax check:
-
-```bash
-npm run check
-```
-
-Preview the schedule in the terminal:
-
-```bash
-npm run list:schedule
-```
-
-Dry-run the patrol trigger without sending a message:
-
-```bash
-curl -sS -X POST 'http://127.0.0.1:3000/api/patrol/trigger?dryRun=1' \
+curl -X POST http://127.0.0.1:3000/api/accounts \
   -H 'Content-Type: application/json' \
-  -d '{"source":"install-test"}'
+  -d '{"name":"Night Shift","password":"replace-this-password"}'
 ```
 
-If `PATROL_TOKEN` (or `PATROL_TRIGGER_TOKEN`) is set, include it:
+Log in:
 
 ```bash
-curl -sS -X POST 'http://127.0.0.1:3000/api/patrol/trigger?dryRun=1&token=change-this-token' \
+curl -X POST http://127.0.0.1:3000/api/accounts/auth \
   -H 'Content-Type: application/json' \
-  -d '{"source":"install-test"}'
+  -d '{"account":"night-shift","password":"replace-this-password"}'
 ```
 
-## Patrol Trigger API
+Use the returned token:
 
-`POST /api/patrol/trigger` is the single endpoint used by both the browser's
-Patrol Mode GPS page and the iPhone Shortcuts -> n8n flow. It:
+```bash
+curl 'http://127.0.0.1:3000/api/whatsapp?account=night-shift' \
+  -H 'X-Account-Auth: <session-token>'
+```
 
-- enforces the same spam guards as the scheduled send (`minMinutesBetweenSends`,
-  `maxSendsPerDay` from `config.json`),
-- sends the configured message as-is, or templates in checkpoint/guard details
-  when they're provided.
+### Patrol Trigger
 
-**Account targeting is dynamic by default.** Omit `?account=` and the trigger
-uses whichever linked WhatsApp account is currently connected — the caller
-(n8n, a Shortcut, anyone) doesn't need to know or hardcode an account id, and
-nothing breaks if you rename an account or link a different phone later. Pass
-`?account=<id>` explicitly only when more than one account is connected at
-once and you need to pick a specific one. With no account param and none
-connected, the endpoint returns `409 { error: "No linked WhatsApp account is
-currently connected." }`.
+When a patrol token is configured, send it as an `X-Patrol-Token` header, `token` query parameter, or JSON body property.
 
-Dry run without sending a WhatsApp message:
+```bash
+curl -X POST http://127.0.0.1:3000/api/patrol/trigger \
+  -H 'Content-Type: application/json' \
+  -H 'X-Patrol-Token: <patrol-token>' \
+  -d '{
+    "source":"watchpoint-ios",
+    "guard":"Navjot",
+    "checkpointName":"North entrance"
+  }'
+```
+
+If `account` is omitted, the API selects a connected WhatsApp runtime. Specify `?account=<id>` when more than one connected account must be targeted explicitly.
+
+Test the complete route without sending a WhatsApp message:
 
 ```text
 POST /api/patrol/trigger?dryRun=1
 ```
 
-Optional `.env` token protection — set **either** variable (they're checked
-interchangeably; set one, not both, to avoid confusion about which is "the"
-token):
+Patrol triggers obey the configured cooldown and daily-send limits.
 
-```text
-PATROL_TOKEN=your-secret
-# or
-PATROL_TRIGGER_TOKEN=your-secret
+## WatchPoint for iOS
+
+### Responsibilities
+
+The iOS app provides the primary interface for:
+
+- creating, selecting, and removing WhatsApp accounts;
+- account password login with Keychain-backed tokens;
+- displaying and sharing a WhatsApp pairing QR code;
+- checking connection state and logging out a linked session;
+- choosing a WhatsApp chat or group;
+- editing the message, shift days, hours, and automatic-send state;
+- viewing scheduler activity;
+- viewing a day-grouped duty log with guard, GPS, retry, and response details;
+- testing Admin API and n8n reachability from the Host & Connection screen;
+- creating map checkpoints and adjusting their radius;
+- detecting checkpoint entry and sending patrol events to n8n;
+- retrying queued patrol events after temporary network failures.
+
+The main account is intentionally protected from deletion. It can be logged out and re-linked.
+
+### Open and Build
+
+1. Open `ios/WatchPoint/WatchPoint.xcodeproj` in Xcode.
+2. Select the `WatchPoint` target.
+3. Choose the development team and bundle identifier appropriate for the device.
+4. Build and run on an iPhone or simulator.
+
+Command-line build example:
+
+```bash
+xcodebuild \
+  -project ios/WatchPoint/WatchPoint.xcodeproj \
+  -scheme WatchPoint \
+  -sdk iphonesimulator \
+  build
 ```
 
-Then call with the token as a query param, `X-Patrol-Token` header, or
-`{"token": "..."}` in the body:
+### First-Time Setup
+
+1. Open **Account** in WatchPoint.
+2. Confirm the Admin API URL in **Preferences**.
+3. Select an account and enter its password.
+4. If WhatsApp is not linked, display or share the QR code.
+5. Scan it from WhatsApp under **Settings → Linked Devices → Link a Device**.
+6. Open **Message & Schedule**, choose the chat, and save the schedule.
+7. Open **Patrol**, create checkpoints, and grant location access.
+
+QR pairing requires another display or device because the phone running WhatsApp cannot scan a QR shown on its own screen. WatchPoint provides full-screen and share actions for this reason.
+
+### Patrol Data
+
+WatchPoint checkpoints, patrol history, deduplication state, and guard name are stored locally on the iPhone under account-specific keys. Scheduler configuration and WhatsApp sessions are stored by the API. Saving a schedule from iOS round-trips the full server configuration so browser-created fields are not discarded.
+
+Older global device data is migrated once into the account selected during the first launch after upgrading. Other accounts start with independent local patrol data.
+
+## Persistent Server Data
+
+Set `DATA_DIR` outside the Git checkout in production. The service stores:
 
 ```text
-POST /api/patrol/trigger?token=your-secret
-```
-
-If neither token env var is set, the endpoint falls back to normal account
-password auth (`X-Account-Auth` session header) instead of a shared secret.
-
-Example JSON body:
-
-```json
-{
-  "source": "n8n-iphone-shortcuts",
-  "guard": "Navjot",
-  "checkpointName": "North checkpoint",
-  "message": "optional override of the configured message"
-}
-```
-
-The configured message (or `message`, if given) is sent, with checkpoint and
-guard details appended when provided.
-
-### Account sessions
-
-`POST /api/accounts/auth` session tokens expire after `SESSION_TOKEN_TTL_HOURS`
-(default 24h) and are rate-limited to 5 failed attempts per 15 minutes per
-IP+account, after which that IP+account pair is locked out for 15 minutes.
-
-## Deploy To Laravel Forge
-
-This app deploys to Forge as a Node.js service behind Nginx, with Forge running `npm start` as a daemon.
-
-See [DEPLOY.md](DEPLOY.md) for the AWS / Laravel Forge deployment steps, daemon command, Nginx proxy block, and persistent data directory setup.
-
-## First Login
-
-If WhatsApp is not linked yet, the UI shows a centered QR code.
-
-Scan it from your phone:
-
-```text
-WhatsApp > Settings > Linked Devices > Link a Device
-```
-
-After the scan succeeds, the Patrol Scheduler UI appears.
-
-The session is saved in:
-
-```text
+accounts.json
+config.json
+send-history.json
 .wwebjs_auth/
+accounts/<account-id>/config.json
+accounts/<account-id>/send-history.json
+accounts/<account-id>/.wwebjs_auth/
 ```
 
-Use **Logout session** in the UI to clear the linked session and force a fresh QR login.
+Do not delete `.wwebjs_auth` unless the account should be forced to pair with WhatsApp again.
 
-## Multiple WhatsApp Accounts
+## Production Deployment
 
-Use the account selector to add separate sender accounts, such as your account and a friend's account. Each account has its own WhatsApp QR login, saved session, target chat, schedule settings, send history, and scheduler timer.
+Run exactly one Scheduler API process. That process manages every account and scheduler timer. Multiple processes would compete for the same WhatsApp sessions and schedule data.
 
-Run only one Node/Forge daemon process. That single process manages all configured accounts.
-
-## Main UI Controls
-
-- **WhatsApp group or chat**: searchable picker for the target group/chat.
-- **Shift type**:
-  - Day shift: `8:00 AM` to `8:00 PM`
-  - Night shift: `8:00 PM` to `8:00 AM`
-- **Weekly shift start days**: recurring weekly schedule.
-- **This week only**: temporary shifts for the current week without changing the recurring pattern.
-- **Other one-time shift dates**: specific exception dates outside the current week.
-- **Patrol starts / Patrol ends**: custom start/end hours.
-- **First message earliest/latest**: random first-message minute window after shift start.
-- **Shortest/Longest gap**: random interval range between patrol messages.
-- **Message**: WhatsApp message text.
-
-Click **Save settings** to save changes. The button and header confirm when settings are saved.
-
-## How Shift Days Work
-
-The selected day is the day the shift starts.
-
-Example night shift:
+Recommended production shape:
 
 ```text
-Monday selected
-8:00 PM to 8:00 AM
+systemd or Docker -> Node API on 127.0.0.1:3000
+Tailscale Funnel  -> HTTPS admin endpoint -> 127.0.0.1:3000
+n8n               -> internal POST /api/patrol/trigger
+WatchPoint iOS    -> HTTPS admin endpoint and n8n webhook
 ```
 
-This means:
+Keep the admin API behind authenticated HTTPS. Use a strong `PATROL_TOKEN`, persistent `DATA_DIR`, and filesystem backups. Do not expose the raw Node port directly to the public internet.
 
-```text
-Monday night through Tuesday morning
+The browser interface under `public/` remains available as a maintenance fallback. WatchPoint iOS is the intended day-to-day interface.
+
+## Verification
+
+Check JavaScript syntax:
+
+```bash
+npm run check
 ```
 
-For a one-time Thursday shift this week only, use **This week only** instead of selecting Thursday as a weekly day.
-
-## Schedule Preview
-
-The UI shows:
-
-- Next message
-- Upcoming shifts grouped by shift window
-- Past shifts, expandable
-
-For overnight shifts, after-midnight messages are grouped under the shift start day and show the actual weekday beside the time.
-
-You can also print the schedule in the terminal:
+Print the generated schedule:
 
 ```bash
 npm run list:schedule
 ```
 
-This does not send messages.
-
-## GPS Patrol Mode
-
-Open:
-
-```text
-http://127.0.0.1:3000/patrol.html
-```
-
-Patrol Mode lets you save checkpoint pins on a map. While live patrol is running on your phone, the browser watches GPS; when the phone enters a checkpoint circle, it calls:
-
-```text
-POST /api/patrol/trigger
-```
-
-The server sends the same saved WhatsApp message to the configured group. The webhook keeps the normal anti-spam guards: minimum time between sends and daily send cap.
-
-Important iPhone/local-Mac behavior:
-
-- GPS works on `127.0.0.1`, but your iPhone cannot reach your Mac's `127.0.0.1`.
-- iPhone Safari requires HTTPS for GPS on non-localhost pages.
-- For real patrol use from a local Mac, run an HTTPS tunnel to port `3000`, then open the tunnel URL on the iPhone.
-- Keep the Patrol Mode page open and the phone awake during the patrol. Browser GPS can pause when the screen locks.
-
-Set a webhook token before exposing the app through a tunnel:
+Check API health and account discovery:
 
 ```bash
-PATROL_TOKEN=change-this-token npm run ui
+curl -fsS http://127.0.0.1:3000/api/accounts
 ```
 
-Then enter the same token in **Patrol webhook token** on `/patrol.html`. The token is saved only in that browser's local storage.
+For an end-to-end release, verify:
 
-For a tunnel, use any HTTPS tunnel that forwards to `http://127.0.0.1:3000`, such as Cloudflare Tunnel or ngrok. The public URL will look like:
+- the Scheduler API process is healthy;
+- the Admin API HTTPS endpoint works over cellular data;
+- iOS can authenticate and refresh WhatsApp status;
+- QR pairing reaches `ready` state;
+- iOS can save and reload message/schedule configuration;
+- a dry-run patrol reaches the Scheduler API through n8n;
+- a controlled live patrol sends one expected WhatsApp message.
 
-```text
-https://your-tunnel.example/patrol.html
-```
+## Security and Operational Notes
 
-### iPhone Shortcuts Geofence
+- `whatsapp-web.js` sessions can disconnect and occasionally require re-pairing.
+- Account session tokens are temporary and are invalidated by API restarts.
+- Never commit `.env`, account passwords, patrol tokens, or WhatsApp session directories.
+- GPS patrol needs location permission. Background behavior is subject to iOS location rules.
+- The API enforces cooldown and daily limits, but live-trigger tests should still use a dedicated test chat whenever possible.
 
-The in-app map is easiest when you can keep the page open. For background triggering on iPhone, use Shortcuts:
+## Planned API Additions
 
-1. Start the app with `PATROL_TOKEN` set.
-2. Make the Mac app reachable from the iPhone with an HTTPS tunnel or hosted domain.
-3. Open iPhone **Shortcuts > Automation > New Automation > Arrive**.
-4. Pick the patrol checkpoint location and choose **Run Immediately** if iOS offers it.
-5. Add **Get Contents of URL**.
-6. Set Method to `POST`.
-7. Use this URL, changing the host/token/account:
+The iOS Host & Connection screen currently performs real reachability checks but cannot show engine uptime or session totals. A future read-only `GET /api/health` endpoint should provide engine version, Node version, uptime, server time, and total/connected account counts.
 
-```text
-https://your-tunnel.example/api/patrol/trigger?token=change-this-token
-```
-
-8. Set the request body to JSON:
-
-```json
-{
-  "source": "ios-shortcuts",
-  "checkpointName": "North checkpoint"
-}
-```
-
-Create one automation per checkpoint if you want different checkpoint names.
-
-## Scheduler Log
-
-The UI includes a **Scheduler Log** panel that shows:
-
-- WhatsApp ready state
-- Next scheduled message time
-- Message send attempts
-- Successful sends
-- WhatsApp message ID when available
-- Send errors
-
-Use this panel to verify that a scheduled message was actually sent.
-
-## Important Runtime Behavior
-
-The scheduler only runs while the Node process is running.
-
-If your laptop shuts down, sleeps, loses internet, or the terminal process stops, messages will not send.
-
-For continuous operation, run it on a server/VPS/EC2 instance and use a process manager such as `pm2`.
-
-Example:
-
-```bash
-npm install -g pm2
-pm2 start server.js --name whatsapp-patrol-scheduler
-pm2 save
-pm2 startup
-```
-
-## Useful Commands
-
-Start UI and scheduler:
-
-```bash
-npm run ui
-```
-
-Preview schedule:
-
-```bash
-npm run list:schedule
-```
-
-Start guarded scheduler:
-
-```bash
-npm start
-```
-
-The old standalone sender is disabled because it bypasses the guarded scheduler.
-Use the list command only for schedule previews:
-
-```bash
-npm run list:schedule
-```
-
-## Files
-
-- `server.js`: local UI server, WhatsApp connection, scheduler, scheduler logs
-- `scheduler.js`: shared schedule generation and config helpers
-- `config.json`: saved settings
-- `send-history.json`: local send/skip/failure history used by the guarded sender
-- `public/`: browser UI
-- `bot.js`: older standalone bot entrypoint
-- `.wwebjs_auth/`: saved WhatsApp session
-- `.wwebjs_cache/`: WhatsApp Web cache
-
-## Safety Note
-
-This project uses an unofficial WhatsApp Web automation library. It can work technically, but it is not the same as Meta's official WhatsApp Business Platform API and may carry account risk.
-
-For production/commercial messaging, use the official WhatsApp Business Platform where possible.
+Scheduler log entries currently expose flattened display strings. Future optional `accountId`, `accountName`, `level`, and message metadata fields would allow the iOS duty log to attribute server events without inferring from the selected account.
