@@ -190,6 +190,8 @@ struct SchedulerLogEntry: Decodable, Identifiable, Hashable {
     let message: String
     let timestamp: String
     let label: String
+    let accountId: String?
+    let accountName: String?
 }
 
 struct LogsResponse: Decodable {

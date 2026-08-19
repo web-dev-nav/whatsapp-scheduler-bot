@@ -27,6 +27,7 @@ struct HostStatusView: View {
     @ObservedObject var appState: AppState
     @State private var adminResult: ReachabilityResult?
     @State private var webhookResult: ReachabilityResult?
+    @State private var engineHealth: SchedulerHealth?
     @State private var isChecking = false
 
     var body: some View {
@@ -75,9 +76,18 @@ struct HostStatusView: View {
             }
 
             Section {
-                Text("Engine version, uptime, and active-session count aren't available yet -- the admin API doesn't expose a health endpoint. Needs a small backend addition.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                if let health = engineHealth {
+                    LabeledContent("Status", value: health.status.capitalized)
+                    LabeledContent("Engine", value: health.engineVersion)
+                    LabeledContent("Node", value: health.nodeVersion)
+                    LabeledContent("Uptime", value: uptimeLabel(health.uptimeSeconds))
+                    LabeledContent("WhatsApp Accounts", value: "\(health.connectedAccounts) / \(health.totalAccounts) connected")
+                    LabeledContent("Active Logins", value: "\(health.activeSessions)")
+                } else {
+                    Text("Engine diagnostics are unavailable until the Admin API health check succeeds.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
             } header: {
                 Text("Engine Diagnostics")
             }
@@ -125,15 +135,43 @@ struct HostStatusView: View {
     private func runChecks() async {
         isChecking = true
         defer { isChecking = false }
-        async let admin = check(urlString: apiURL(base: appState.schedulerAdminBaseURL, path: "/api/accounts"))
+        async let admin = checkAdminHealth()
         async let webhook = check(urlString: appState.webhookURL)
-        adminResult = await admin
+        let adminCheck = await admin
+        adminResult = adminCheck.result
+        engineHealth = adminCheck.health
         webhookResult = await webhook
     }
 
-    private func apiURL(base: String, path: String) -> String {
-        let trimmed = base.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        return "\(trimmed)\(path)"
+    private func checkAdminHealth() async -> (result: ReachabilityResult, health: SchedulerHealth?) {
+        let start = Date()
+        do {
+            guard let baseURL = URL(string: appState.schedulerAdminBaseURL) else {
+                return (ReachabilityResult(ok: false, detail: "Invalid URL", roundTripMs: nil, checkedAt: Date()), nil)
+            }
+            let api = SchedulerAdminAPI(
+                baseURL: baseURL,
+                accountId: appState.selectedAdminAccountId,
+                token: ""
+            )
+            let health = try await api.health()
+            let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
+            return (
+                ReachabilityResult(ok: health.status == "ok", detail: "API \(health.status)", roundTripMs: elapsedMs, checkedAt: Date()),
+                health
+            )
+        } catch {
+            return (ReachabilityResult(ok: false, detail: error.localizedDescription, roundTripMs: nil, checkedAt: Date()), nil)
+        }
+    }
+
+    private func uptimeLabel(_ totalSeconds: Int) -> String {
+        let days = totalSeconds / 86_400
+        let hours = (totalSeconds % 86_400) / 3_600
+        let minutes = (totalSeconds % 3_600) / 60
+        if days > 0 { return "\(days)d \(hours)h \(minutes)m" }
+        if hours > 0 { return "\(hours)h \(minutes)m" }
+        return "\(minutes)m"
     }
 
     private func check(urlString: String) async -> ReachabilityResult {

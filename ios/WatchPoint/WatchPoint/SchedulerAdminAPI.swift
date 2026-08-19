@@ -52,6 +52,18 @@ struct AdminErrorResponse: Codable {
     let error: String?
 }
 
+struct SchedulerHealth: Codable {
+    let status: String
+    let engineVersion: String
+    let nodeVersion: String
+    let startedAt: String
+    let uptimeSeconds: Int
+    let serverTime: String
+    let totalAccounts: Int
+    let connectedAccounts: Int
+    let activeSessions: Int
+}
+
 enum SchedulerAdminError: LocalizedError {
     case invalidURL
     case http(status: Int, message: String)
@@ -74,6 +86,10 @@ struct SchedulerAdminAPI {
     func accounts() async throws -> [SchedulerAccount] {
         let response: AccountsResponse = try await request(path: "/api/accounts")
         return response.accounts
+    }
+
+    func health() async throws -> SchedulerHealth {
+        try await request(path: "/api/health")
     }
 
     func login(password: String) async throws -> AccountAuthResponse {

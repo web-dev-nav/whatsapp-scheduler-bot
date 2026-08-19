@@ -51,17 +51,17 @@ struct ActivityTab: View {
                         Text(log.label)
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        if let accountName = log.accountName {
+                            Text("\(accountName) · \(log.type.capitalized)")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
             }
         } header: {
             Text("Scheduler Log")
         } footer: {
-            // The server only returns log lines for whichever account this
-            // request was scoped to -- it doesn't label lines with an
-            // account/guard field, so this is the most honest attribution
-            // available client-side. Richer structured fields would need a
-            // backend change (see the backend-ask writeup).
             Text("Scheduler activity for \(currentAccountName).")
         }
     }

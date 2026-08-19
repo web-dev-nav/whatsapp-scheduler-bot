@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const QRCode = require('qrcode');
+const { version: ENGINE_VERSION } = require('./package.json');
 const { loadEnvFile } = require('./env');
 
 loadEnvFile();
@@ -45,6 +46,7 @@ const runtimes = new Map();
 const accountSessions = new Map();
 const authAttempts = new Map();
 let shuttingDown = false;
+const startedAt = new Date();
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(path.dirname(ACCOUNTS_PATH), { recursive: true });
@@ -1060,10 +1062,42 @@ function findReadyRuntime() {
   return null;
 }
 
+function buildHealthResponse() {
+  const now = Date.now();
+
+  for (const [token, session] of accountSessions.entries()) {
+    if (now - session.createdAt > SESSION_TOKEN_TTL_MS) {
+      accountSessions.delete(token);
+    }
+  }
+
+  const accounts = readAccounts();
+  const connectedAccounts = accounts.reduce((count, account) => {
+    return count + (runtimes.get(account.id)?.state.status === 'ready' ? 1 : 0);
+  }, 0);
+
+  return {
+    status: shuttingDown ? 'shutting_down' : 'ok',
+    engineVersion: ENGINE_VERSION,
+    nodeVersion: process.version,
+    startedAt: startedAt.toISOString(),
+    uptimeSeconds: Math.floor((now - startedAt.getTime()) / 1000),
+    serverTime: new Date(now).toISOString(),
+    totalAccounts: accounts.length,
+    connectedAccounts,
+    activeSessions: accountSessions.size,
+  };
+}
+
 const server = http.createServer(async (request, response) => {
   try {
     const url = new URL(request.url, `http://${HOST}:${PORT}`);
     const pathname = url.pathname;
+
+    if (request.method === 'GET' && pathname === '/api/health') {
+      sendJson(response, 200, buildHealthResponse());
+      return;
+    }
 
     if (request.method === 'GET' && pathname === '/api/accounts') {
       sendJson(response, 200, { accounts: publicAccounts() });

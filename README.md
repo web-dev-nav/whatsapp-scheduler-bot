@@ -109,6 +109,7 @@ Login is limited to five failed attempts per account and IP in 15 minutes, follo
 
 | Method | Path | Authentication | Purpose |
 | --- | --- | --- | --- |
+| `GET` | `/api/health` | None | Read engine health, uptime, versions, and account/session totals |
 | `GET` | `/api/accounts` | None | List accounts |
 | `POST` | `/api/accounts` | None | Create an account and password |
 | `POST` | `/api/accounts/auth` | Password in body | Create a session token |
@@ -121,6 +122,48 @@ Login is limited to five failed attempts per account and IP in 15 minutes, follo
 | `POST` | `/api/config/preview` | None | Preview a proposed schedule without saving |
 | `GET` | `/api/logs?account=<id>` | Account token | Read scheduler activity |
 | `POST` | `/api/patrol/trigger` | Patrol token or account token | Trigger a guarded patrol message |
+
+### iOS Server Contract
+
+The Host & Connection screen reads `GET /api/health`. The endpoint is intentionally unauthenticated so the app can diagnose the engine before an account login succeeds. It does not expose account names, tokens, configuration, chats, or phone numbers.
+
+Example response:
+
+```json
+{
+  "status": "ok",
+  "engineVersion": "1.0.0",
+  "nodeVersion": "v26.0.0",
+  "startedAt": "2026-08-19T12:00:00.000Z",
+  "uptimeSeconds": 3600,
+  "serverTime": "2026-08-19T13:00:00.000Z",
+  "totalAccounts": 3,
+  "connectedAccounts": 2,
+  "activeSessions": 2
+}
+```
+
+`connectedAccounts` counts WhatsApp runtimes in the `ready` state. `activeSessions` counts unexpired Admin API login tokens; expired tokens are removed while health is calculated. The iOS model for this payload is `SchedulerHealth` in `SchedulerAdminAPI.swift`.
+
+Scheduler entries returned by `GET /api/logs?account=<id>` include stable structured attribution in addition to their display text:
+
+```json
+{
+  "id": "1787144400000-a1b2c3",
+  "type": "success",
+  "message": "Patrol message sent to \"Operations\" via watchpoint-ios.",
+  "timestamp": "2026-08-19T13:00:00.000Z",
+  "label": "Aug 19, 2026, 9:00:00 AM",
+  "accountId": "night-shift",
+  "accountName": "Night Shift",
+  "details": {
+    "chatName": "Operations",
+    "messageId": "..."
+  }
+}
+```
+
+The iOS client decodes `accountId` and `accountName` as optional fields for compatibility with older servers. `type` is the log severity/category (`info`, `success`, `error`, or `scheduled`). `details` is event-specific metadata and clients should tolerate unknown keys.
 
 ### Account Example
 
@@ -299,11 +342,27 @@ For an end-to-end release, verify:
 - GPS patrol needs location permission. Background behavior is subject to iOS location rules.
 - The API enforces cooldown and daily limits, but live-trigger tests should still use a dedicated test chat whenever possible.
 
-## Planned API Additions
+## API Compatibility
 
-The iOS Host & Connection screen currently performs real reachability checks but cannot show engine uptime or session totals. A future read-only `GET /api/health` endpoint should provide engine version, Node version, uptime, server time, and total/connected account counts.
+The iOS app now consumes the read-only `/api/health` endpoint for engine diagnostics and the structured `accountId`/`accountName` fields on scheduler log entries. Keep these fields backward compatible when evolving the server. New response fields may be added, but existing field names and types should not change without updating `SchedulerAdminAPI.swift` and this contract together.
 
-Scheduler log entries currently expose flattened display strings. Future optional `accountId`, `accountName`, `level`, and message metadata fields would allow the iOS duty log to attribute server events without inferring from the selected account.
+### Implementation Record — 2026-08-19
+
+The server-to-iOS diagnostics handoff was implemented across the following components:
+
+- `server.js` exposes the unauthenticated, non-sensitive `GET /api/health` response and removes expired Admin API sessions while calculating `activeSessions`.
+- `SchedulerAdminAPI.swift` defines `SchedulerHealth` and provides the iOS health request.
+- `HostStatusView.swift` replaces the generic Admin API reachability probe with the semantic health check and displays engine version, Node version, uptime, connected WhatsApp accounts, and active logins.
+- `WatchPointModels.swift` decodes optional `accountId` and `accountName` scheduler-log attribution for compatibility with both updated and older servers.
+- `ActivityTab.swift` displays the attributed account name and log category.
+- This README defines the API payloads and compatibility rules that must be passed forward with future server or iOS changes.
+
+Verification completed on 2026-08-19:
+
+- `npm run check` passed for all JavaScript entry points.
+- An isolated live server returned a valid `200` response from `/api/health`.
+- `git diff --check` passed.
+- An iOS/Xcode build was not run in the Linux server environment because Xcode is unavailable; the Swift changes require final compilation in Xcode before an iOS release.
 
 ## Planned iOS Additions
 
