@@ -42,6 +42,12 @@ struct ContentView: View {
                 selectedTab = .account
             }
         }
+        .task {
+            if !appState.adminToken.isEmpty {
+                await appState.fetchAdminAccounts()
+                await appState.selectAccount(appState.selectedAdminAccountId)
+            }
+        }
         .alert("WatchPoint", isPresented: alertIsPresented) {
             Button("OK", role: .cancel) { appState.alertMessage = nil }
         } message: {

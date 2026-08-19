@@ -295,6 +295,7 @@ function accountPaths(account) {
       dataDir: DATA_DIR,
       configPath: path.resolve(process.env.CONFIG_PATH || path.join(DATA_DIR, 'config.json')),
       sendHistoryPath: LEGACY_SEND_HISTORY_PATH,
+      patrolStatePath: path.join(DATA_DIR, 'patrol-state.json'),
       authDir: LEGACY_WHATSAPP_AUTH_DIR,
     };
   }
@@ -305,6 +306,7 @@ function accountPaths(account) {
     dataDir,
     configPath: path.join(dataDir, 'config.json'),
     sendHistoryPath: path.join(dataDir, 'send-history.json'),
+    patrolStatePath: path.join(dataDir, 'patrol-state.json'),
     authDir: path.join(dataDir, '.wwebjs_auth'),
   };
 }
@@ -313,6 +315,7 @@ function ensureAccountPaths(paths) {
   fs.mkdirSync(paths.dataDir, { recursive: true });
   fs.mkdirSync(path.dirname(paths.configPath), { recursive: true });
   fs.mkdirSync(path.dirname(paths.sendHistoryPath), { recursive: true });
+  fs.mkdirSync(path.dirname(paths.patrolStatePath), { recursive: true });
   fs.mkdirSync(paths.authDir, { recursive: true });
 }
 
@@ -384,6 +387,151 @@ function addSchedulerLog(runtime, type, message, details = {}) {
   } else {
     console.log(logLine);
   }
+}
+
+const DEFAULT_PATROL_SETTINGS = {
+  accuracyThresholdMeters: 50,
+  checkpointCooldownMinutes: 12,
+};
+
+function clamp(value, min, max, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.min(Math.max(number, min), max) : fallback;
+}
+
+function normalizePatrolCheckpoint(checkpoint, index) {
+  const latitude = Number(checkpoint?.latitude ?? checkpoint?.lat);
+  const longitude = Number(checkpoint?.longitude ?? checkpoint?.lng);
+  if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) return null;
+  if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) return null;
+
+  const id = String(checkpoint?.id || '').trim().slice(0, 64) || crypto.randomUUID();
+  return {
+    id,
+    name: String(checkpoint?.name || `Checkpoint ${index + 1}`).trim().slice(0, 80) || `Checkpoint ${index + 1}`,
+    latitude,
+    longitude,
+    radiusMeters: clamp(checkpoint?.radiusMeters, 10, 2000, 100),
+  };
+}
+
+function defaultPatrolState(runtime) {
+  const config = loadConfigFromPath(runtime.paths.configPath);
+  return {
+    version: 1,
+    profile: { name: runtime.account.name },
+    settings: { ...DEFAULT_PATROL_SETTINGS },
+    checkpoints: (config.patrol?.checkpoints || [])
+      .map(normalizePatrolCheckpoint)
+      .filter(Boolean),
+    history: [],
+    session: { active: false, updatedAt: null },
+    dedupe: { insideState: {}, lastSentAtByCheckpoint: {} },
+  };
+}
+
+function normalizePatrolState(runtime, input) {
+  const defaults = defaultPatrolState(runtime);
+  const state = input && typeof input === 'object' ? input : {};
+  const rawCheckpoints = Array.isArray(state.checkpoints) ? state.checkpoints : defaults.checkpoints;
+  const checkpointIds = new Set();
+  const checkpoints = rawCheckpoints
+    .map(normalizePatrolCheckpoint)
+    .filter((checkpoint) => {
+      if (!checkpoint || checkpointIds.has(checkpoint.id)) return false;
+      checkpointIds.add(checkpoint.id);
+      return true;
+    })
+    .slice(0, 200);
+
+  const profileName = String(state.profile?.name || defaults.profile.name).trim().slice(0, 80);
+  const history = Array.isArray(state.history) ? state.history.slice(0, 200) : [];
+  const insideState = state.dedupe?.insideState && typeof state.dedupe.insideState === 'object'
+    ? state.dedupe.insideState
+    : {};
+  const lastSentAtByCheckpoint =
+    state.dedupe?.lastSentAtByCheckpoint && typeof state.dedupe.lastSentAtByCheckpoint === 'object'
+      ? state.dedupe.lastSentAtByCheckpoint
+      : {};
+
+  return {
+    version: 1,
+    profile: { name: profileName || defaults.profile.name },
+    settings: {
+      accuracyThresholdMeters: clamp(
+        state.settings?.accuracyThresholdMeters,
+        5,
+        200,
+        DEFAULT_PATROL_SETTINGS.accuracyThresholdMeters
+      ),
+      checkpointCooldownMinutes: clamp(
+        state.settings?.checkpointCooldownMinutes,
+        1,
+        240,
+        DEFAULT_PATROL_SETTINGS.checkpointCooldownMinutes
+      ),
+    },
+    checkpoints,
+    history,
+    session: {
+      active: state.session?.active === true,
+      updatedAt: typeof state.session?.updatedAt === 'string' ? state.session.updatedAt : null,
+    },
+    dedupe: { insideState, lastSentAtByCheckpoint },
+  };
+}
+
+function loadPatrolState(runtime) {
+  if (!fs.existsSync(runtime.paths.patrolStatePath)) {
+    const initial = defaultPatrolState(runtime);
+    savePatrolState(runtime, initial);
+    return initial;
+  }
+
+  return normalizePatrolState(runtime, JSON.parse(fs.readFileSync(runtime.paths.patrolStatePath, 'utf8')));
+}
+
+function savePatrolState(runtime, state) {
+  const normalized = normalizePatrolState(runtime, state);
+  fs.writeFileSync(runtime.paths.patrolStatePath, `${JSON.stringify(normalized, null, 2)}\n`);
+  return normalized;
+}
+
+function publicPatrolState(runtime, state = loadPatrolState(runtime)) {
+  return {
+    account: publicAccount(getAccount(runtime.account.id) || runtime.account),
+    profile: state.profile,
+    settings: state.settings,
+    checkpoints: state.checkpoints,
+    history: state.history,
+    session: state.session,
+  };
+}
+
+function syncCheckpointsToConfig(runtime, checkpoints) {
+  const config = loadConfigFromPath(runtime.paths.configPath);
+  config.patrol = {
+    checkpoints: checkpoints.map((checkpoint) => ({
+      id: checkpoint.id,
+      name: checkpoint.name,
+      lat: checkpoint.latitude,
+      lng: checkpoint.longitude,
+      radiusMeters: checkpoint.radiusMeters,
+    })),
+  };
+  saveConfigToPath(runtime.paths.configPath, config);
+}
+
+function distanceMeters(latitudeA, longitudeA, latitudeB, longitudeB) {
+  const toRadians = (degrees) => (degrees * Math.PI) / 180;
+  const earthRadiusMeters = 6371000;
+  const latitudeDelta = toRadians(latitudeB - latitudeA);
+  const longitudeDelta = toRadians(longitudeB - longitudeA);
+  const calculated =
+    Math.sin(latitudeDelta / 2) ** 2 +
+    Math.cos(toRadians(latitudeA)) * Math.cos(toRadians(latitudeB)) * Math.sin(longitudeDelta / 2) ** 2;
+  const a = Math.min(Math.max(calculated, 0), 1);
+  return earthRadiusMeters * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 function resetWhatsappState(runtime, status = 'starting') {
@@ -749,6 +897,137 @@ async function sendPatrolMessageNow(
     addSchedulerLog(runtime, 'error', 'Failed to send location-triggered patrol message.', { error: error.message });
     return { ok: false, reason: error.message };
   }
+}
+
+function buildPatrolEvent(state, checkpoint, payload = {}) {
+  const timestamp = new Date().toISOString();
+  const hasNumber = (value) => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
+  const requestPayload = {
+    source: String(payload.source || 'watchpoint-ios'),
+    guard: state.profile.name,
+    checkpointId: checkpoint.id,
+    checkpointName: checkpoint.name,
+    eventType: String(payload.eventType || 'arrival'),
+    timestamp,
+    lat: hasNumber(payload.lat) ? Number(payload.lat) : checkpoint.latitude,
+    lng: hasNumber(payload.lng) ? Number(payload.lng) : checkpoint.longitude,
+    accuracyMeters: hasNumber(payload.accuracyMeters) ? Number(payload.accuracyMeters) : null,
+  };
+
+  return {
+    id: crypto.randomUUID(),
+    source: requestPayload.source,
+    guardName: state.profile.name,
+    checkpointId: checkpoint.id,
+    checkpointName: checkpoint.name,
+    eventType: requestPayload.eventType,
+    timestamp,
+    latitude: requestPayload.lat,
+    longitude: requestPayload.lng,
+    accuracyMeters: requestPayload.accuracyMeters,
+    status: 'queued',
+    requestPayload,
+    apiReceived: true,
+    responseCode: 200,
+    schedulerStatusCode: null,
+    responseSummary: 'Patrol event received by Scheduler API.',
+    schedulerReason: null,
+    retryCount: 0,
+    lastAttemptAt: null,
+  };
+}
+
+async function deliverPatrolEvent(runtime, state, event) {
+  event.status = 'sending';
+  event.retryCount = Number(event.retryCount || 0) + 1;
+  event.lastAttemptAt = new Date().toISOString();
+  savePatrolState(runtime, state);
+
+  const result = await sendPatrolMessageNow(runtime, {
+    source: event.source,
+    checkpointName: event.checkpointName,
+    guard: event.guardName,
+  });
+
+  event.schedulerStatusCode = result.ok ? 200 : 409;
+  event.responseSummary = result.ok ? 'Scheduler sent the patrol message.' : result.reason;
+  event.schedulerReason = result.reason || null;
+  event.status = result.ok
+    ? 'schedulerSucceeded'
+    : runtime.state.status === 'ready'
+      ? 'failed'
+      : 'engineNotReady';
+
+  if (result.ok && event.checkpointId) {
+    state.dedupe.lastSentAtByCheckpoint[event.checkpointId] = new Date().toISOString();
+  }
+
+  savePatrolState(runtime, state);
+  return event;
+}
+
+async function createAndDeliverPatrolEvent(runtime, state, checkpoint, payload) {
+  const event = buildPatrolEvent(state, checkpoint, payload);
+  state.history.unshift(event);
+  state.history.splice(200);
+  savePatrolState(runtime, state);
+  await deliverPatrolEvent(runtime, state, event);
+  return event;
+}
+
+function checkpointCanSend(state, checkpoint, now = Date.now()) {
+  const lastSentAt = state.dedupe.lastSentAtByCheckpoint[checkpoint.id];
+  if (!lastSentAt) return true;
+  const elapsedMs = now - new Date(lastSentAt).getTime();
+  if (!Number.isFinite(elapsedMs)) return true;
+  return elapsedMs >= state.settings.checkpointCooldownMinutes * MS_PER_MINUTE;
+}
+
+async function processPatrolLocation(runtime, payload) {
+  const state = loadPatrolState(runtime);
+  if (!state.session.active) {
+    return { ok: false, statusCode: 409, error: 'Start the patrol before sending location updates.', state };
+  }
+
+  const latitude = Number(payload.lat);
+  const longitude = Number(payload.lng);
+  const accuracyMeters = Number(payload.accuracyMeters);
+  if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) {
+    return { ok: false, statusCode: 400, error: 'lat must be between -90 and 90.', state };
+  }
+  if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+    return { ok: false, statusCode: 400, error: 'lng must be between -180 and 180.', state };
+  }
+  if (!Number.isFinite(accuracyMeters) || accuracyMeters < 0) {
+    return { ok: false, statusCode: 400, error: 'accuracyMeters must be a non-negative number.', state };
+  }
+
+  if (accuracyMeters > state.settings.accuracyThresholdMeters) {
+    return { ok: true, ignored: true, reason: 'Location accuracy is outside the configured threshold.', events: [], state };
+  }
+
+  const events = [];
+  const now = Date.now();
+  for (const checkpoint of state.checkpoints) {
+    const inside = distanceMeters(latitude, longitude, checkpoint.latitude, checkpoint.longitude) <= checkpoint.radiusMeters;
+    const wasInside = state.dedupe.insideState[checkpoint.id] === true;
+    state.dedupe.insideState[checkpoint.id] = inside;
+
+    if (!wasInside && inside && checkpointCanSend(state, checkpoint, now)) {
+      events.push(
+        await createAndDeliverPatrolEvent(runtime, state, checkpoint, {
+          source: payload.source || 'watchpoint-ios',
+          eventType: 'arrival',
+          lat: latitude,
+          lng: longitude,
+          accuracyMeters,
+        })
+      );
+    }
+  }
+
+  savePatrolState(runtime, state);
+  return { ok: true, ignored: false, events, state };
 }
 
 function scheduleNextPatrolMessage(runtime) {
@@ -1239,6 +1518,156 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === 'GET' && pathname === '/api/patrol/state') {
+      const accountId = accountFromUrl(url);
+      if (!requireAccountAuth(request, response, accountId)) return;
+
+      const runtime = requireRuntime(response, accountId);
+      if (!runtime) return;
+
+      sendJson(response, 200, publicPatrolState(runtime));
+      return;
+    }
+
+    if (request.method === 'PUT' && pathname === '/api/patrol/state') {
+      const accountId = accountFromUrl(url);
+      if (!requireAccountAuth(request, response, accountId)) return;
+
+      const runtime = requireRuntime(response, accountId);
+      if (!runtime) return;
+
+      const body = await readRequestBody(request);
+      const payload = JSON.parse(body || '{}');
+      const current = loadPatrolState(runtime);
+      const sessionWasActive = current.session.active;
+      const next = {
+        ...current,
+        profile: payload.profile === undefined ? current.profile : payload.profile,
+        settings: payload.settings === undefined ? current.settings : payload.settings,
+        checkpoints: payload.checkpoints === undefined ? current.checkpoints : payload.checkpoints,
+        session: payload.session === undefined
+          ? current.session
+          : { active: payload.session?.active === true, updatedAt: new Date().toISOString() },
+      };
+
+      if (sessionWasActive && next.session.active === false) {
+        next.dedupe.insideState = {};
+      }
+
+      const state = savePatrolState(runtime, next);
+      if (payload.checkpoints !== undefined) {
+        syncCheckpointsToConfig(runtime, state.checkpoints);
+      }
+      sendJson(response, 200, publicPatrolState(runtime, state));
+      return;
+    }
+
+    if (request.method === 'POST' && pathname === '/api/patrol/import') {
+      const accountId = accountFromUrl(url);
+      if (!requireAccountAuth(request, response, accountId)) return;
+
+      const runtime = requireRuntime(response, accountId);
+      if (!runtime) return;
+
+      const body = await readRequestBody(request);
+      const payload = JSON.parse(body || '{}');
+      const state = loadPatrolState(runtime);
+      let checkpointsImported = false;
+
+      if (state.checkpoints.length === 0 && Array.isArray(payload.checkpoints)) {
+        state.checkpoints = payload.checkpoints;
+        checkpointsImported = payload.checkpoints.length > 0;
+      }
+      if (state.history.length === 0 && Array.isArray(payload.history)) {
+        state.history = payload.history.filter((event) => event && typeof event === 'object').slice(0, 200);
+      }
+      if (state.profile.name === runtime.account.name && payload.profile?.name) {
+        state.profile = payload.profile;
+      }
+      if (payload.settings && typeof payload.settings === 'object') {
+        state.settings = payload.settings;
+      }
+
+      const imported = savePatrolState(runtime, state);
+      if (checkpointsImported) {
+        syncCheckpointsToConfig(runtime, imported.checkpoints);
+      }
+      sendJson(response, 200, publicPatrolState(runtime, imported));
+      return;
+    }
+
+    if (request.method === 'POST' && pathname === '/api/patrol/location') {
+      const accountId = accountFromUrl(url);
+      if (!requireAccountAuth(request, response, accountId)) return;
+
+      const runtime = requireRuntime(response, accountId);
+      if (!runtime) return;
+
+      const body = await readRequestBody(request);
+      const payload = JSON.parse(body || '{}');
+      const result = await processPatrolLocation(runtime, payload);
+      sendJson(response, result.statusCode || 200, {
+        ok: result.ok,
+        ...(result.error ? { error: result.error } : {}),
+        ...(result.reason ? { reason: result.reason } : {}),
+        ignored: result.ignored === true,
+        events: result.events || [],
+        state: publicPatrolState(runtime, result.state),
+      });
+      return;
+    }
+
+    if (request.method === 'POST' && pathname === '/api/patrol/events') {
+      const accountId = accountFromUrl(url);
+      if (!requireAccountAuth(request, response, accountId)) return;
+
+      const runtime = requireRuntime(response, accountId);
+      if (!runtime) return;
+
+      const body = await readRequestBody(request);
+      const payload = JSON.parse(body || '{}');
+      const state = loadPatrolState(runtime);
+      const checkpoint = state.checkpoints.find((candidate) => candidate.id === payload.checkpointId);
+      if (!checkpoint) {
+        sendJson(response, 404, { error: `Unknown checkpoint "${payload.checkpointId || ''}".` });
+        return;
+      }
+
+      const event = await createAndDeliverPatrolEvent(runtime, state, checkpoint, {
+        source: payload.source || 'watchpoint-ios-manual',
+        eventType: payload.eventType || 'arrival',
+        lat: payload.lat,
+        lng: payload.lng,
+        accuracyMeters: payload.accuracyMeters,
+      });
+      sendJson(response, 200, { ok: event.status === 'schedulerSucceeded', event, state: publicPatrolState(runtime, state) });
+      return;
+    }
+
+    if (request.method === 'POST' && pathname === '/api/patrol/events/retry') {
+      const accountId = accountFromUrl(url);
+      if (!requireAccountAuth(request, response, accountId)) return;
+
+      const runtime = requireRuntime(response, accountId);
+      if (!runtime) return;
+
+      const body = await readRequestBody(request);
+      const payload = JSON.parse(body || '{}');
+      const state = loadPatrolState(runtime);
+      const retryableStatuses = new Set(['queued', 'failed', 'engineNotReady']);
+      const events = state.history
+        .filter((event) => (!payload.eventId || event.id === payload.eventId))
+        .filter((event) => retryableStatuses.has(event.status) && Number(event.retryCount || 0) < 5)
+        .sort((left, right) => String(left.timestamp).localeCompare(String(right.timestamp)));
+
+      for (const event of events) {
+        await deliverPatrolEvent(runtime, state, event);
+      }
+
+      sendJson(response, 200, { ok: true, retried: events.length, state: publicPatrolState(runtime, state) });
+      return;
+    }
+
     if (request.method === 'PUT' && pathname === '/api/config') {
       const accountId = accountFromUrl(url);
       if (!requireAccountAuth(request, response, accountId)) return;
@@ -1249,6 +1678,11 @@ const server = http.createServer(async (request, response) => {
       const body = await readRequestBody(request);
       const payload = JSON.parse(body);
       const config = saveConfigToPath(runtime.paths.configPath, payload.config);
+      const patrolState = loadPatrolState(runtime);
+      patrolState.checkpoints = (config.patrol?.checkpoints || [])
+        .map(normalizePatrolCheckpoint)
+        .filter(Boolean);
+      savePatrolState(runtime, patrolState);
       scheduleNextPatrolMessage(runtime);
       sendJson(response, 200, { account: publicAccount(runtime.account), config, preview: buildPreview(config) });
       return;

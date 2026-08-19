@@ -5,37 +5,34 @@ WatchPoint is a WhatsApp patrol platform with two clearly separated parts:
 - **Scheduler API** — a continuously running Node.js service that owns WhatsApp sessions, accounts, schedules, logs, and message delivery.
 - **WatchPoint for iOS** — the primary user interface for connecting accounts, configuring messages and schedules, managing checkpoints, and running patrols.
 
-The Node service is the only component that communicates with WhatsApp. The iOS app never embeds WhatsApp Web or sends WhatsApp messages directly.
+The Node service is the system of record and the only component that communicates with WhatsApp. The iOS app is an API-driven UI: it collects device GPS, renders server data, and sends authenticated commands, but it does not own patrol business state or message delivery.
 
-WatchPoint supports a shared-device, multi-guard workflow. Each Scheduler account represents one guard and has its own WhatsApp session, schedule, checkpoints, patrol history, deduplication state, and guard name. Switching accounts stops any active patrol before loading the next guard's data. Network URLs and GPS thresholds remain device-wide settings.
+WatchPoint supports a shared-device, multi-guard workflow. Each Scheduler account represents one guard and has its own WhatsApp session, schedule, checkpoints, patrol history, active-patrol state, deduplication state, settings, and guard profile on the server. Switching accounts stops the old account's patrol through the API before loading the next account. Only the API base URL, selected-account pointer, and Keychain login tokens remain device-local.
 
 > This project uses `whatsapp-web.js`, which automates a linked WhatsApp Web session. It is not the official WhatsApp Business API.
 
 ## Architecture
 
 ```text
-                               Admin API
-WatchPoint iOS  ──────────────────────────────────┐
-  • accounts                                      │
-  • WhatsApp QR/status                            ▼
-  • message and schedule                 Scheduler API (Node.js)
-  • activity                             • account authentication
-                                         • WhatsApp Web sessions
-WatchPoint iOS                            • schedule engine
-  • GPS checkpoints                      • send guards and logs
-  • patrol events                                 │
-         │                                         ▼
-         └── HTTPS ──> n8n webhook ──> patrol API ──> WhatsApp
+WatchPoint iOS                         Scheduler API (Node.js)
+  • SwiftUI screens     HTTPS/JSON       • authentication
+  • Keychain token  ──────────────────>  • account-scoped persistence
+  • device GPS samples                   • checkpoints and patrol sessions
+  • map and forms      <────────────────  • GPS transition/dedupe engine
+                                          • schedules, history, and logs
+                                          • WhatsApp Web sessions
+                                                    │
+                                                    ▼
+                                                WhatsApp
 ```
 
 The iOS app currently defaults to:
 
 ```text
-Admin API:     https://hp-server.tailed5092.ts.net:10000
-Patrol webhook: https://hp-server.tailed5092.ts.net/webhook/patrol-test
+Scheduler API: https://hp-server.tailed5092.ts.net:10000
 ```
 
-Both URLs can be changed from the app's Preferences screen.
+The URL can be changed from the app's Preferences screen. iOS must not be configured with an n8n or patrol-webhook URL; patrol traffic uses the authenticated Scheduler API.
 
 ## Repository Layout
 
@@ -44,11 +41,11 @@ server.js                         HTTP API and WhatsApp runtimes
 scheduler.js                      Config normalization and schedule generation
 config.json                       Legacy/main-account configuration
 public/                           Optional browser admin interface
-n8n/                              Patrol webhook workflow export
+n8n/                              Legacy/optional external integration export
 ios/WatchPoint/                   Native SwiftUI application
 ios/WatchPoint/WatchPoint/
   SchedulerAdminAPI.swift         API client and Keychain token storage
-  AppState.swift                  App state, GPS, accounts, config, and logs
+  AppState.swift                  API-backed UI state and device GPS forwarding
   AccountTab.swift                Account and WhatsApp connection UI
   SetupView.swift                 Message and schedule UI
   PatrolTab.swift                 Map, checkpoints, and active patrol UI
@@ -121,7 +118,13 @@ Login is limited to five failed attempts per account and IP in 15 minutes, follo
 | `PUT` | `/api/config?account=<id>` | Account token | Save message and schedule configuration |
 | `POST` | `/api/config/preview` | None | Preview a proposed schedule without saving |
 | `GET` | `/api/logs?account=<id>` | Account token | Read scheduler activity |
-| `POST` | `/api/patrol/trigger` | Patrol token or account token | Trigger a guarded patrol message |
+| `GET` | `/api/patrol/state?account=<id>` | Account token | Read profile, settings, checkpoints, history, and patrol session |
+| `PUT` | `/api/patrol/state?account=<id>` | Account token | Save profile, settings, checkpoints, and active-patrol state |
+| `POST` | `/api/patrol/import?account=<id>` | Account token | One-time import of legacy iOS patrol data into an empty server state |
+| `POST` | `/api/patrol/location?account=<id>` | Account token | Process an iOS GPS sample and trigger checkpoint-entry events |
+| `POST` | `/api/patrol/events?account=<id>` | Account token | Manually trigger a checkpoint arrival from the UI |
+| `POST` | `/api/patrol/events/retry?account=<id>` | Account token | Retry queued, failed, or engine-not-ready patrol events |
+| `POST` | `/api/patrol/trigger` | Patrol token or account token | Legacy external-integration message trigger |
 
 ### iOS Server Contract
 
@@ -132,7 +135,7 @@ Example response:
 ```json
 {
   "status": "ok",
-  "engineVersion": "1.0.0",
+  "engineVersion": "1.1.0",
   "nodeVersion": "v26.0.0",
   "startedAt": "2026-08-19T12:00:00.000Z",
   "uptimeSeconds": 3600,
@@ -165,6 +168,69 @@ Scheduler entries returned by `GET /api/logs?account=<id>` include stable struct
 
 The iOS client decodes `accountId` and `accountName` as optional fields for compatibility with older servers. `type` is the log severity/category (`info`, `success`, `error`, or `scheduled`). `details` is event-specific metadata and clients should tolerate unknown keys.
 
+#### Patrol state
+
+After account login or account switching, iOS must call:
+
+```http
+GET /api/patrol/state?account=<id>
+X-Account-Auth: <session-token>
+```
+
+The response is the authoritative UI model:
+
+```json
+{
+  "account": { "id": "night-shift", "name": "Night Shift", "hasPassword": true },
+  "profile": { "name": "Navjot" },
+  "settings": {
+    "accuracyThresholdMeters": 50,
+    "checkpointCooldownMinutes": 12
+  },
+  "checkpoints": [
+    {
+      "id": "4f604bc1-761a-4ed7-a49c-e68146db12fe",
+      "name": "North entrance",
+      "latitude": 43.1394,
+      "longitude": -80.2644,
+      "radiusMeters": 100
+    }
+  ],
+  "history": [],
+  "session": {
+    "active": false,
+    "updatedAt": "2026-08-19T13:00:00.000Z"
+  }
+}
+```
+
+iOS may keep this response in memory for rendering, but must not persist these domain fields in `UserDefaults`, files, Core Data, or another local database. To edit them, send the complete `profile`, `settings`, `checkpoints`, and `session` values to `PUT /api/patrol/state`; then replace the in-memory UI model with the returned normalized state.
+
+#### GPS and patrol events
+
+Starting or stopping a patrol is a state update with `session.active` set to `true` or `false`. While the returned session is active, iOS sends device location samples:
+
+```http
+POST /api/patrol/location?account=<id>
+X-Account-Auth: <session-token>
+Content-Type: application/json
+
+{
+  "source": "watchpoint-ios",
+  "lat": 43.1394,
+  "lng": -80.2644,
+  "accuracyMeters": 12
+}
+```
+
+The server—not iOS—applies the accuracy threshold, calculates checkpoint distance, detects outside-to-inside transitions, enforces per-checkpoint cooldown, creates history, and calls the guarded WhatsApp sender. The response contains `ignored`, any newly created `events`, and the latest full `state`; iOS replaces its in-memory patrol model with that state.
+
+For the **Send Test Arrival** UI action, call `POST /api/patrol/events` with `checkpointId`, source, event type, and optional current GPS values. For **Retry Queue**, call `POST /api/patrol/events/retry`. Both return the latest state. Do not call `/api/patrol/trigger` from the iOS app; that endpoint remains only for legacy automation or external services authenticated with `PATROL_TOKEN`.
+
+#### Upgrade migration
+
+Older app builds stored patrol data locally. On the first authenticated load per account, the updated iOS client reads those legacy keys once and calls `POST /api/patrol/import`. The server imports checkpoints/history only when the corresponding server collection is empty, normalizes the result, and returns the authoritative state. After a successful import, iOS deletes the legacy local keys and records only a migration-complete marker.
+
 ### Account Example
 
 Create an account:
@@ -190,9 +256,9 @@ curl 'http://127.0.0.1:3000/api/whatsapp?account=night-shift' \
   -H 'X-Account-Auth: <session-token>'
 ```
 
-### Patrol Trigger
+### Legacy External Patrol Trigger
 
-When a patrol token is configured, send it as an `X-Patrol-Token` header, `token` query parameter, or JSON body property.
+This route is not part of the iOS flow. External automation can use it when a patrol token is configured, supplied as an `X-Patrol-Token` header, `token` query parameter, or JSON body property.
 
 ```bash
 curl -X POST http://127.0.0.1:3000/api/patrol/trigger \
@@ -229,10 +295,10 @@ The iOS app provides the primary interface for:
 - editing the message, shift days, hours, and automatic-send state;
 - viewing scheduler activity;
 - viewing a day-grouped duty log with guard, GPS, retry, and response details;
-- testing Admin API and n8n reachability from the Host & Connection screen;
+- testing Scheduler API health from the Host & Connection screen;
 - creating map checkpoints and adjusting their radius;
-- detecting checkpoint entry and sending patrol events to n8n;
-- retrying queued patrol events after temporary network failures.
+- forwarding device GPS samples to the authenticated Scheduler API;
+- presenting server-detected checkpoint arrivals and retrying server-owned events.
 
 The main account is intentionally protected from deletion. It can be logged out and re-linked.
 
@@ -267,9 +333,9 @@ QR pairing requires another display or device because the phone running WhatsApp
 
 ### Patrol Data
 
-WatchPoint checkpoints, patrol history, deduplication state, and guard name are stored locally on the iPhone under account-specific keys. Scheduler configuration and WhatsApp sessions are stored by the API. Saving a schedule from iOS round-trips the full server configuration so browser-created fields are not discarded.
+The Scheduler API stores the guard profile, GPS settings, checkpoints, active-patrol state, transition/deduplication state, patrol history, schedule configuration, and WhatsApp session under the selected account. The iOS app holds the latest API response in memory only for rendering.
 
-Older global device data is migrated once into the account selected during the first launch after upgrading. Other accounts start with independent local patrol data.
+The API base URL, selected-account pointer, temporary Keychain token, current device GPS fix, and location permission are necessarily device-local. They are connection/UI concerns, not patrol business records. Legacy iOS patrol records are imported once as described in the iOS Server Contract.
 
 ## Persistent Server Data
 
@@ -279,9 +345,11 @@ Set `DATA_DIR` outside the Git checkout in production. The service stores:
 accounts.json
 config.json
 send-history.json
+patrol-state.json
 .wwebjs_auth/
 accounts/<account-id>/config.json
 accounts/<account-id>/send-history.json
+accounts/<account-id>/patrol-state.json
 accounts/<account-id>/.wwebjs_auth/
 ```
 
@@ -296,13 +364,27 @@ Recommended production shape:
 ```text
 systemd or Docker -> Node API on 127.0.0.1:3000
 Tailscale Funnel  -> HTTPS admin endpoint -> 127.0.0.1:3000
-n8n               -> internal POST /api/patrol/trigger
-WatchPoint iOS    -> HTTPS admin endpoint and n8n webhook
+WatchPoint iOS    -> one HTTPS Scheduler API endpoint
+Optional n8n      -> legacy external POST /api/patrol/trigger
 ```
 
 Keep the admin API behind authenticated HTTPS. Use a strong `PATROL_TOKEN`, persistent `DATA_DIR`, and filesystem backups. Do not expose the raw Node port directly to the public internet.
 
 The browser interface under `public/` remains available as a maintenance fallback. WatchPoint iOS is the intended day-to-day interface.
+
+### API-First Upgrade Order
+
+Deploy the server before distributing the updated iOS app:
+
+1. Back up the complete production `DATA_DIR`.
+2. Deploy the Node changes and restart the single Scheduler API process.
+3. Confirm `GET /api/health`, then authenticate a test account and confirm `GET /api/patrol/state?account=<id>` returns `200`.
+4. Confirm the process can create and retain `patrol-state.json` under `DATA_DIR`.
+5. Release the updated iOS build only after those checks pass.
+6. On the first iOS login for each existing account, allow the legacy import to finish before editing checkpoints or starting patrol.
+7. Confirm checkpoints/history reload after force-quitting and reopening the app, then include `patrol-state.json` in normal backups.
+
+The old iOS build can continue using its local data and n8n path during a staged server rollout. The new iOS build requires the new patrol endpoints and should not be released against an older server. Do not remove the legacy `/api/patrol/trigger` or n8n workflow until all deployed phones have upgraded and their local data has been imported.
 
 ## Verification
 
@@ -331,7 +413,9 @@ For an end-to-end release, verify:
 - iOS can authenticate and refresh WhatsApp status;
 - QR pairing reaches `ready` state;
 - iOS can save and reload message/schedule configuration;
-- a dry-run patrol reaches the Scheduler API through n8n;
+- starting/stopping patrol persists through `/api/patrol/state`;
+- GPS samples reach `/api/patrol/location` without duplicating an inside transition;
+- checkpoints and history reload from the API on a second device or fresh app launch;
 - a controlled live patrol sends one expected WhatsApp message.
 
 ## Security and Operational Notes
@@ -344,7 +428,7 @@ For an end-to-end release, verify:
 
 ## API Compatibility
 
-The iOS app now consumes the read-only `/api/health` endpoint for engine diagnostics and the structured `accountId`/`accountName` fields on scheduler log entries. Keep these fields backward compatible when evolving the server. New response fields may be added, but existing field names and types should not change without updating `SchedulerAdminAPI.swift` and this contract together.
+The iOS app consumes `/api/health`, structured scheduler logs, and every authenticated patrol endpoint documented above. Keep these fields backward compatible when evolving the server. New response fields may be added, but existing field names and types should not change without updating `SchedulerAdminAPI.swift`, `WatchPointModels.swift`, and this contract together. Every iOS mutation must use the state returned by the API rather than assuming the submitted value was accepted unchanged.
 
 ### Implementation Record — 2026-08-19
 
@@ -364,14 +448,29 @@ Verification completed on 2026-08-19:
 - `git diff --check` passed.
 - An iOS/Xcode build was not run in the Linux server environment because Xcode is unavailable; the Swift changes require final compilation in Xcode before an iOS release.
 
+### API-First Patrol Record — 2026-08-19
+
+The patrol domain was moved from iOS local storage and the n8n send path into the Scheduler API:
+
+- The engine version was raised to `1.1.0` for the new patrol API contract.
+- The iOS marketing/build version was raised to `1.1 (2)` so the API-first client can be distinguished during staged deployment.
+- `server.js` persists per-account `patrol-state.json`, normalizes profile/settings/checkpoints, owns active-patrol and deduplication state, calculates GPS transitions, records delivery history, retries events, and invokes WhatsApp delivery.
+- `SchedulerAdminAPI.swift` is the single iOS transport for patrol reads, writes, GPS samples, manual events, retries, and legacy import.
+- `AppState.swift` retains API responses only in memory, forwards device location samples, and reloads returned server state after every patrol operation.
+- `PatrolTab.swift`, `AccountTab.swift`, `PreferencesView.swift`, and `HostStatusView.swift` use the single API-backed flow; the n8n URL UI and direct webhook service were removed.
+- Legacy per-account or global iOS data is imported once into empty server collections, then removed from local storage.
+- `config.json` patrol checkpoints remain synchronized with `patrol-state.json` for browser/config compatibility.
+
+Server validation completed with `npm run check`, `git diff --check`, and isolated authenticated smoke tests covering legacy import, state creation, checkpoint/settings persistence, patrol start, inaccurate-location rejection, accurate checkpoint entry, concurrent duplicate suppression, event persistence, engine-not-ready delivery status, and retry-count persistence. Xcode verification is still required on macOS before release.
+
 ## Planned iOS Additions
 
 WatchPoint's shared-device, multi-guard model (see Architecture) raises two gaps not yet addressed:
 
-- **App lock.** The device holds multiple guards' WhatsApp sessions, checkpoints, and history behind Keychain tokens that do not expire from the device's perspective. Nothing today stops anyone who picks up the device from seeing all of it. Planned: a Face ID/passcode gate on launch and on returning from background (`LocalAuthentication`, with device-passcode fallback), toggleable in Preferences and on by default for shared-device deployments.
+- **App lock.** The device's Keychain tokens provide access to multiple guards' server-backed WhatsApp sessions, checkpoints, and history. Nothing today stops anyone who picks up the unlocked device from seeing that data through the API. Planned: a Face ID/passcode gate on launch and on returning from background (`LocalAuthentication`, with device-passcode fallback), toggleable in Preferences and on by default for shared-device deployments.
 - **Shift-change reconfirmation.** Nothing prompts a guard to confirm their identity when picking the device back up after a while, so a guard could unknowingly patrol under the previous guard's account if nobody remembered to switch. Planned: track a per-account "last confirmed" timestamp, and prompt ("Still {guard} on {account}? Yes / Switch Guard") on the Patrol tab if it's been more than a few hours since the account was last selected or confirmed.
 
-Also recommended, but dependent on backend changes and out of scope for the iOS-only session:
+Also recommended as later backend work:
 
 - **Persist session tokens server-side** (not just in memory) so guards aren't logged out mid-shift by an unrelated engine restart or deploy — this already caused one dead-end-UI bug (see git history).
 - **WhatsApp pairing-code login** (`client.requestPairingCode`) as the real fix for "can't scan a QR on the same phone you're reading it on," instead of the current QR-only flow.

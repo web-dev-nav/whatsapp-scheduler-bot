@@ -73,6 +73,7 @@ private struct WhatsAppSessionView: View {
         .navigationBarTitleDisplayMode(.inline)
         .keyboardDoneButton()
         .scrollDismissesKeyboard(.interactively)
+        .onDisappear { Task { _ = await appState.savePatrolState() } }
         .confirmationDialog(
             "Remove this account?",
             isPresented: $showDeleteConfirm,
@@ -144,17 +145,16 @@ private struct WhatsAppSessionView: View {
         }
     }
 
-    /// Local-only, per-account -- this is the name attached to every patrol
-    /// event this guard sends, kept separate from the WhatsApp account name
-    /// (which is server-side and can be reused/renamed independently).
+    /// Account-scoped server profile used to attribute every patrol event.
     private var guardNameSection: some View {
         Section {
             TextField("Guard name", text: $appState.guardName)
                 .textInputAutocapitalization(.words)
+                .onSubmit { Task { _ = await appState.savePatrolState() } }
         } header: {
             Text("This Guard")
         } footer: {
-            Text("Shown in the duty log for every patrol event sent from this account. Stored on this device only, separately for each account.")
+            Text("Shown in the duty log for every patrol event. Saved to this account through the Scheduler API.")
         }
     }
 

@@ -52,7 +52,7 @@ struct PatrolTab: View {
             .navigationTitle("Patrol")
             .onAppear { appState.requestLocationAccess() }
             .onDisappear {
-                appState.saveCheckpoints()
+                Task { await appState.saveCheckpoints() }
                 appState.stopWatchingLocationIfIdle()
             }
             .onChange(of: appState.currentLocation?.coordinate.latitude) { _, _ in
@@ -128,7 +128,13 @@ struct PatrolTab: View {
             }
 
             Button {
-                appState.shiftIsActive ? appState.stopPatrol() : appState.startPatrol()
+                Task {
+                    if appState.shiftIsActive {
+                        await appState.stopPatrol()
+                    } else {
+                        await appState.startPatrol()
+                    }
+                }
             } label: {
                 Label(appState.shiftIsActive ? "Stop Patrol" : "Start Live Patrol", systemImage: appState.shiftIsActive ? "stop.fill" : "play.fill")
                     .frame(maxWidth: .infinity)
@@ -176,7 +182,12 @@ struct PatrolTab: View {
                 }
                 .onTapGesture { point in
                     if let coordinate = proxy.convert(point, from: .local) {
-                        lastAddedCheckpointId = appState.addCheckpoint(latitude: coordinate.latitude, longitude: coordinate.longitude)
+                        Task {
+                            lastAddedCheckpointId = await appState.addCheckpoint(
+                                latitude: coordinate.latitude,
+                                longitude: coordinate.longitude
+                            )
+                        }
                     }
                 }
             }
@@ -184,7 +195,7 @@ struct PatrolTab: View {
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
             Button {
-                lastAddedCheckpointId = appState.addCheckpoint()
+                Task { lastAddedCheckpointId = await appState.addCheckpoint() }
             } label: {
                 Label("Drop At My Location", systemImage: "location")
                     .frame(maxWidth: .infinity)
@@ -245,7 +256,7 @@ struct PatrolTab: View {
                                 .font(.subheadline.weight(.semibold))
                             Spacer()
                             Button(role: .destructive) {
-                                appState.deleteCheckpoint(checkpoint)
+                                Task { await appState.deleteCheckpoint(checkpoint) }
                             } label: {
                                 Image(systemName: "trash")
                             }
@@ -314,7 +325,7 @@ struct PatrolTab: View {
                     }
                     .onEnded { _ in
                         radiusDrag = nil
-                        appState.saveCheckpoints()
+                        Task { await appState.saveCheckpoints() }
                     }
             )
     }

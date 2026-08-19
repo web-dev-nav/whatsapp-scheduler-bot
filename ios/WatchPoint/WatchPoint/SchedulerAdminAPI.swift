@@ -125,6 +125,60 @@ struct SchedulerAdminAPI {
         return response.logs
     }
 
+    func patrolState() async throws -> PatrolStateResponse {
+        try await request(path: "/api/patrol/state", query: ["account": accountId], authorized: true)
+    }
+
+    func updatePatrolState(_ state: PatrolStateUpdateRequest) async throws -> PatrolStateResponse {
+        try await request(
+            path: "/api/patrol/state",
+            method: "PUT",
+            query: ["account": accountId],
+            body: state,
+            authorized: true
+        )
+    }
+
+    func importLegacyPatrolState(_ state: PatrolImportRequest) async throws -> PatrolStateResponse {
+        try await request(
+            path: "/api/patrol/import",
+            method: "POST",
+            query: ["account": accountId],
+            body: state,
+            authorized: true
+        )
+    }
+
+    func sendLocation(_ location: PatrolLocationRequest) async throws -> PatrolLocationResponse {
+        try await request(
+            path: "/api/patrol/location",
+            method: "POST",
+            query: ["account": accountId],
+            body: location,
+            authorized: true
+        )
+    }
+
+    func sendPatrolEvent(_ event: PatrolEventRequest) async throws -> PatrolActionResponse {
+        try await request(
+            path: "/api/patrol/events",
+            method: "POST",
+            query: ["account": accountId],
+            body: event,
+            authorized: true
+        )
+    }
+
+    func retryPatrolEvents() async throws -> PatrolRetryResponse {
+        try await request(
+            path: "/api/patrol/events/retry",
+            method: "POST",
+            query: ["account": accountId],
+            body: [String: String](),
+            authorized: true
+        )
+    }
+
     func updateConfig(_ config: PatrolConfig) async throws -> ConfigResponse {
         try await request(
             path: "/api/config",
@@ -165,7 +219,9 @@ struct SchedulerAdminAPI {
         }
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try JSONEncoder().encode(body)
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            request.httpBody = try encoder.encode(body)
         }
 
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -179,7 +235,19 @@ struct SchedulerAdminAPI {
                 message: decoded?.error ?? String(data: data, encoding: .utf8) ?? ""
             )
         }
-        return try JSONDecoder().decode(Response.self, from: data)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let value = try container.decode(String.self)
+            let fractional = ISO8601DateFormatter()
+            fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = fractional.date(from: value) { return date }
+            let standard = ISO8601DateFormatter()
+            standard.formatOptions = [.withInternetDateTime]
+            if let date = standard.date(from: value) { return date }
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid ISO-8601 date: \(value)")
+        }
+        return try decoder.decode(Response.self, from: data)
     }
 
     private func request<Response: Decodable>(

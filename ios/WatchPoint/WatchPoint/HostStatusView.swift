@@ -2,8 +2,8 @@
 //  HostStatusView.swift
 //  WatchPoint
 //
-//  Full detail about the backend this app talks to -- the admin API host
-//  and the patrol webhook host -- with a live reachability check. Built
+//  Full detail about the single Scheduler API backend with a semantic
+//  health check. Built
 //  after diagnosing a real admin-Funnel TLS outage by hand with `curl`;
 //  this makes that kind of check available in-app instead of the guard
 //  only seeing a cryptic system alert ("a TLS error caused the secure
@@ -26,7 +26,6 @@ private struct ReachabilityResult {
 struct HostStatusView: View {
     @ObservedObject var appState: AppState
     @State private var adminResult: ReachabilityResult?
-    @State private var webhookResult: ReachabilityResult?
     @State private var engineHealth: SchedulerHealth?
     @State private var isChecking = false
 
@@ -45,16 +44,7 @@ struct HostStatusView: View {
             } header: {
                 Text("Admin API")
             } footer: {
-                Text("Used for login, QR status, and schedule editing.")
-            }
-
-            Section {
-                LabeledContent("URL", value: appState.webhookURL)
-                resultRow(webhookResult)
-            } header: {
-                Text("Patrol Webhook")
-            } footer: {
-                Text("Checkpoint arrivals go here (n8n), not directly to the admin API. Only accepts POST, so a non-error result here just confirms the host is reachable over HTTPS -- not that a real patrol event would succeed.")
+                Text("The iOS UI uses this API for accounts, WhatsApp, schedules, checkpoints, patrol state, GPS arrivals, and history.")
             }
 
             Section {
@@ -135,12 +125,9 @@ struct HostStatusView: View {
     private func runChecks() async {
         isChecking = true
         defer { isChecking = false }
-        async let admin = checkAdminHealth()
-        async let webhook = check(urlString: appState.webhookURL)
-        let adminCheck = await admin
+        let adminCheck = await checkAdminHealth()
         adminResult = adminCheck.result
         engineHealth = adminCheck.health
-        webhookResult = await webhook
     }
 
     private func checkAdminHealth() async -> (result: ReachabilityResult, health: SchedulerHealth?) {
@@ -174,23 +161,4 @@ struct HostStatusView: View {
         return "\(minutes)m"
     }
 
-    private func check(urlString: String) async -> ReachabilityResult {
-        guard let url = URL(string: urlString.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-            return ReachabilityResult(ok: false, detail: "Invalid URL", roundTripMs: nil, checkedAt: Date())
-        }
-
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 10
-        let start = Date()
-        do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
-            guard let http = response as? HTTPURLResponse else {
-                return ReachabilityResult(ok: false, detail: "No HTTP response", roundTripMs: elapsedMs, checkedAt: Date())
-            }
-            return ReachabilityResult(ok: true, detail: "HTTP \(http.statusCode)", roundTripMs: elapsedMs, checkedAt: Date())
-        } catch {
-            return ReachabilityResult(ok: false, detail: error.localizedDescription, roundTripMs: nil, checkedAt: Date())
-        }
-    }
 }

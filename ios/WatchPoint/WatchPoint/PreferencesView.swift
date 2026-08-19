@@ -2,11 +2,8 @@
 //  PreferencesView.swift
 //  WatchPoint
 //
-//  Device-level knobs shared by whichever guard is using this device --
-//  pushed from the Account hub. Deliberately does NOT include guard name,
-//  which is per-account/per-guard and lives in WhatsAppSessionView instead
-//  (see AppState.guardName). This screen only holds things that describe
-//  the device/network, not a guard's identity.
+//  The Admin API URL stays device-local so the app knows where to connect.
+//  Patrol behavior settings are account-scoped server data.
 //
 
 import SwiftUI
@@ -25,15 +22,6 @@ struct PreferencesView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Patrol Send API") {
-                TextField("n8n webhook URL", text: $appState.webhookURL, axis: .vertical)
-                    .keyboardType(.URL)
-                    .textInputAutocapitalization(.never)
-                Text("Checkpoint arrivals go to n8n. They do not call the scheduler directly.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-
             Section("Location And Dedupe") {
                 Stepper("Cooldown \(Int(appState.checkpointCooldownMinutes)) min", value: $appState.checkpointCooldownMinutes, in: 10...15, step: 1)
                 Stepper("Max accuracy \(Int(appState.accuracyThresholdMeters)) m", value: $appState.accuracyThresholdMeters, in: 10...100, step: 5)
@@ -45,5 +33,6 @@ struct PreferencesView: View {
         .keyboardDoneButton()
         .scrollDismissesKeyboard(.interactively)
         .navigationTitle("Preferences")
+        .onDisappear { Task { _ = await appState.savePatrolState() } }
     }
 }

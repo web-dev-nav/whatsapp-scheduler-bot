@@ -118,7 +118,7 @@ struct ActivityTab: View {
     private func eventDetail(_ event: PatrolEvent) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Label(event.webhookReceived ? "Webhook received" : "Webhook pending", systemImage: event.webhookReceived ? "checkmark.circle" : "clock")
+                Label(event.apiReceived ? "API received" : "API pending", systemImage: event.apiReceived ? "checkmark.circle" : "clock")
                 Spacer()
                 if let responseCode = event.responseCode {
                     Text("HTTP \(responseCode)")
