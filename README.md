@@ -482,11 +482,9 @@ Both `whatsapp-scheduler.service` and `tailscale-admin-funnel.service` were rest
 
 At the end of deployment, API/Funnel health was good but `/api/health` still reported `connectedAccounts: 0`. One controlled Scheduler retry did not restore WhatsApp readiness. The production log shows WhatsApp browser startup failures began before this deployment, and direct access to `web.whatsapp.com` succeeds, so this is tracked as a pre-existing saved-session/browser recovery issue rather than an API rollout failure. Do not delete `.wwebjs_auth`; use the iOS Account screen to inspect status and re-link WhatsApp only if the saved session does not recover. `npm ci` also reported eight high-severity transitive dependency findings; no automatic audit fix was applied because forced dependency changes could be breaking and require a separate reviewed upgrade.
 
-### Pending 1.2.0 Server Handoff — 2026-08-20
+### Production 1.2.0 Deployment Record — 2026-08-20
 
-Production remains on engine `1.1.0`. The `1.2.0` implementation is now present in this local working tree but has not been committed or pushed to `origin/main`; do not pull or restart production for this handoff until the implementation commit has been pushed and reviewed.
-
-The expected `1.2.0` contract is:
+Commits `e03d868` and `ad0fb8d` were reviewed, fast-forwarded from `origin/main`, and deployed on `Hp-server` through `whatsapp-scheduler.service`. Engine `1.2.0` provides:
 
 - one shared WhatsApp destination for scheduled and patrol delivery;
 - one shared minimum-message interval, defaulting to **No wait**;
@@ -494,15 +492,11 @@ The expected `1.2.0` contract is:
 - removal of the old 75-minute patrol restriction;
 - backward-compatible normalization of existing `1.1.0` configuration.
 
-After the implementation commit is pushed:
+Before installation, the Scheduler service was stopped and the complete production `DATA_DIR` was archived to `/home/navjot/watchpoint-backups/2026-08-20-pre-1.2.0.tar.gz`. The 66,768,871-byte archive passed a complete listing check and retains account configuration and `.wwebjs_auth` session data. `npm ci`, `npm run check`, `npm run list:schedule`, JavaScript syntax checks, and a simulated legacy-config migration all passed. The migration test confirmed that a missing interval becomes `0` and the old common message is copied to `patrol.message`. Production already had an explicit 15-minute delivery interval, so the backward-compatible migration preserved it; use iOS **Shared Delivery Settings** to select **No wait** if immediate cross-path delivery is desired.
 
-1. Review the diff and verify the config migration against a copy of production `config.json`.
-2. Run `npm ci`, `npm run check`, schedule-generation tests, and isolated patrol/scheduled-send guard tests.
-3. Commit/push any required review fixes before production deployment.
-4. Stop `whatsapp-scheduler.service`, back up the complete `DATA_DIR`, pull the reviewed commit, and run `npm ci`.
-5. Start `whatsapp-scheduler.service` and `tailscale-admin-funnel.service`.
-6. Confirm external `/api/health` returns `200` with `"engineVersion":"1.2.0"` and confirm authenticated config round-tripping preserves both message flows.
-7. Log into the iOS account again if the API restart invalidates its token, then use **Activity → Retry Queue** for failed patrol entries.
+Both `whatsapp-scheduler.service` and `tailscale-admin-funnel.service` restarted successfully. External `GET https://hp-server.tailed5092.ts.net:10000/api/health` returned `200` with `"engineVersion":"1.2.0"`, `"minimumIOSVersion":"1.2"`, and `"connectedAccounts":1`. `/api/accounts` returned `200`, while unauthenticated `/api/config` and `/api/patrol/state` returned the expected `401`, confirming the routes are live and protected. Restarting clears in-memory Admin tokens, so iOS users may need to enter their guard-account password again. After logging in, verify the shared destination/interval and both independent message texts, then use **Activity → Retry Queue** for any failed patrol entries.
+
+`npm ci` continues to report eight high-severity dependency findings. No automatic audit fix was applied because the forced upgrade path may contain breaking changes and requires a separate review.
 
 ## iOS Shared-Device Safeguards
 
