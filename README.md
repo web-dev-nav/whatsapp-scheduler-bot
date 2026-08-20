@@ -556,6 +556,14 @@ Both `whatsapp-scheduler.service` and `tailscale-admin-funnel.service` restarted
 
 `npm ci` continues to report eight high-severity dependency findings. No automatic audit fix was applied because the forced upgrade path may contain breaking changes and requires a separate review.
 
+### Production 1.3.0 Deployment Record — 2026-08-20
+
+Commit `e99dd14` was reviewed, fast-forwarded from `origin/main`, and deployed on `Hp-server` through `whatsapp-scheduler.service`. Engine `1.3.0` adds categorized scheduled, patrol, and system activity plus authenticated `DELETE /api/logs?account=<id>&scope=all|schedule|patrol`. WatchPoint iOS `1.2 (5)` uses that contract for its activity filters and confirmed clear actions, and refreshes both scheduler logs and patrol history when the Activity page is pulled to refresh.
+
+Validation included `npm ci`, `npm run check`, `npm run list:schedule`, `git diff --check`, and an isolated authenticated API test. The API test confirmed that clearing scheduled activity leaves patrol events intact, clearing patrol activity removes its visible delivery/event history, invalid scopes return `400`, and both `send-history.json` and checkpoint deduplication state remain byte-for-byte or structurally protected. The reported eight high-severity dependency findings remain unchanged; no automatic audit fix was applied.
+
+Before restart, the complete production `DATA_DIR` was archived to `/home/navjot/watchpoint-backups/2026-08-20-pre-1.3.0.tar.gz`. The 73,204,684-byte archive passed a complete listing check and retains all account, delivery-safety, patrol, and WhatsApp session data. Both `whatsapp-scheduler.service` and `tailscale-admin-funnel.service` restarted successfully. External `/api/health` returned `200` with `"engineVersion":"1.3.0"`, `"minimumIOSVersion":"1.2"`, and `"connectedAccounts":1`; unauthenticated activity deletion and patrol-state requests returned the expected `401`, confirming the new clear route is live and protected. The restart clears in-memory Admin tokens, so iOS users may need to log into their guard account again before using Activity clear actions.
+
 ## iOS Shared-Device Safeguards
 
 WatchPoint's shared-device, multi-guard model (see Architecture) includes two device-side safeguards:
