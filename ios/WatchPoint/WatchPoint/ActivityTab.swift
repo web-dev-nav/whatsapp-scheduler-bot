@@ -14,36 +14,126 @@ import SwiftUI
 
 struct ActivityTab: View {
     @ObservedObject var appState: AppState
+    @State private var showClearConfirmation = false
+    @State private var pendingClearScope: ActivityClearScope = .all
+    @State private var selectedFilter: ActivityFilter = .all
+
+    private enum ActivityFilter: String, CaseIterable, Identifiable {
+        case all
+        case schedule
+        case patrol
+
+        var id: Self { self }
+        var title: String {
+            switch self {
+            case .all: return "All"
+            case .schedule: return "Scheduled"
+            case .patrol: return "Patrol"
+            }
+        }
+    }
 
     var body: some View {
         NavigationStack {
             List {
-                schedulerLogSection
-                patrolEventsHeaderSection
-                ForEach(groupedHistory, id: \.day) { group in
-                    Section(dayLabel(group.day)) {
-                        ForEach(group.events) { event in
-                            DisclosureGroup {
-                                eventDetail(event)
-                            } label: {
-                                EventRow(event: event)
+                Section {
+                    Picker("Activity Type", selection: $selectedFilter) {
+                        ForEach(ActivityFilter.allCases) { filter in
+                            Text(filter.title).tag(filter)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
+
+                if selectedFilter == .all || selectedFilter == .schedule {
+                    messageLogSection(
+                        title: "Scheduled Messages",
+                        icon: "calendar.badge.clock",
+                        emptyMessage: "No scheduled message activity yet.",
+                        entries: scheduledLogs
+                    )
+                }
+
+                if selectedFilter == .all || selectedFilter == .patrol {
+                    messageLogSection(
+                        title: "Patrol Messages",
+                        icon: "figure.walk",
+                        emptyMessage: "No patrol message delivery activity yet.",
+                        entries: patrolLogs
+                    )
+                    patrolEventsHeaderSection
+                    ForEach(groupedHistory, id: \.day) { group in
+                        Section(dayLabel(group.day)) {
+                            ForEach(group.events) { event in
+                                DisclosureGroup {
+                                    eventDetail(event)
+                                } label: {
+                                    EventRow(event: event)
+                                }
                             }
                         }
                     }
                 }
+
+                if selectedFilter == .all, !systemLogs.isEmpty {
+                    messageLogSection(
+                        title: "System",
+                        icon: "gearshape.2",
+                        emptyMessage: "",
+                        entries: systemLogs
+                    )
+                }
             }
             .navigationTitle("Activity")
-            .refreshable { await appState.fetchLogs() }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    if appState.isClearingActivity {
+                        ProgressView()
+                    } else {
+                        Menu {
+                            clearButton(scope: .schedule, disabled: scheduledLogs.isEmpty)
+                            clearButton(scope: .patrol, disabled: patrolLogs.isEmpty && appState.history.isEmpty)
+                            Divider()
+                            clearButton(scope: .all, disabled: allActivityIsEmpty)
+                        } label: {
+                            Label("Clear Activity Log", systemImage: "trash")
+                        }
+                        .disabled(allActivityIsEmpty)
+                    }
+                }
+            }
+            .refreshable {
+                async let logs: Void = appState.fetchLogs()
+                async let patrol: Void = appState.fetchPatrolState()
+                _ = await (logs, patrol)
+            }
+            .confirmationDialog(
+                "Clear \(pendingClearScope.title.lowercased()) for \(currentAccountName)?",
+                isPresented: $showClearConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Clear \(pendingClearScope.title)", role: .destructive) {
+                    Task { await appState.clearActivityLogs(scope: pendingClearScope) }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(clearConfirmationMessage)
+            }
         }
     }
 
-    private var schedulerLogSection: some View {
+    private func messageLogSection(
+        title: String,
+        icon: String,
+        emptyMessage: String,
+        entries: [SchedulerLogEntry]
+    ) -> some View {
         Section {
-            if appState.logs.isEmpty {
-                Text("No scheduler activity yet.")
+            if entries.isEmpty {
+                Text(emptyMessage)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(appState.logs) { log in
+                ForEach(entries) { log in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(log.message)
                             .font(.subheadline)
@@ -59,10 +149,73 @@ struct ActivityTab: View {
                 }
             }
         } header: {
-            Text("Scheduler Log")
+            Label(title, systemImage: icon)
         } footer: {
-            Text("Scheduler activity for \(currentAccountName).")
+            Text("Activity for \(currentAccountName).")
         }
+    }
+
+    private func clearButton(scope: ActivityClearScope, disabled: Bool) -> some View {
+        Button(role: .destructive) {
+            pendingClearScope = scope
+            showClearConfirmation = true
+        } label: {
+            Label("Clear \(scope.title)", systemImage: scope == .all ? "trash" : "trash.slash")
+        }
+        .disabled(disabled)
+    }
+
+    private var allActivityIsEmpty: Bool {
+        appState.logs.isEmpty && appState.history.isEmpty
+    }
+
+    private var scheduledLogs: [SchedulerLogEntry] {
+        appState.logs.filter { activityCategory(for: $0) == "schedule" }
+    }
+
+    private var patrolLogs: [SchedulerLogEntry] {
+        appState.logs.filter { activityCategory(for: $0) == "patrol" }
+    }
+
+    private var systemLogs: [SchedulerLogEntry] {
+        appState.logs.filter { activityCategory(for: $0) == "system" }
+    }
+
+    private func activityCategory(for log: SchedulerLogEntry) -> String {
+        if log.category == "schedule" || log.category == "patrol" {
+            return log.category!
+        }
+
+        // Older engines did not send a category. Keep their in-memory logs
+        // readable until the server is restarted on the versioned contract.
+        let message = log.message.lowercased()
+        if message.contains("location trigger")
+            || message.contains("location-triggered")
+            || message.contains("patrol message sent") {
+            return "patrol"
+        }
+        if log.type == "scheduled"
+            || message.contains("scheduled message")
+            || message.contains("scheduler")
+            || message.contains("sending patrol message")
+            || message.hasPrefix("message sent") {
+            return "schedule"
+        }
+        return "system"
+    }
+
+    private var clearConfirmationMessage: String {
+        let removalDescription: String
+        switch pendingClearScope {
+        case .schedule:
+            removalDescription = "This removes visible scheduled-message activity only."
+        case .patrol:
+            removalDescription = "This removes visible patrol delivery logs and checkpoint event history."
+        case .all:
+            removalDescription = "This removes all visible scheduled, patrol, and system activity."
+        }
+        return removalDescription
+            + " Checkpoints, settings, WhatsApp connection, delivery safeguards, and duplicate-send protection remain unchanged."
     }
 
     private var patrolEventsHeaderSection: some View {

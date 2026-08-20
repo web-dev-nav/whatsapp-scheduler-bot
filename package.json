@@ -1,6 +1,6 @@
 {
   "name": "whatsapp-scheduler-bot",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Local WhatsApp patrol scheduler with browser UI and guarded sender.",
   "main": "server.js",
   "scripts": {

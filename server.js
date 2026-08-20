@@ -395,6 +395,7 @@ function addSchedulerLog(runtime, type, message, details = {}) {
   const entry = {
     id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
     type,
+    category: ['schedule', 'patrol'].includes(details.category) ? details.category : 'system',
     message,
     details,
     timestamp: new Date().toISOString(),
@@ -647,7 +648,7 @@ function clearScheduler(runtime) {
   if (runtime.schedulerTimer) {
     clearTimeout(runtime.schedulerTimer);
     runtime.schedulerTimer = null;
-    addSchedulerLog(runtime, 'info', 'Scheduler timer cleared.');
+    addSchedulerLog(runtime, 'info', 'Scheduler timer cleared.', { category: 'schedule' });
   }
 }
 
@@ -809,7 +810,7 @@ async function sendPatrolMessage(runtime, scheduledAt) {
   const chat = await findTargetChat(runtime, config.groupName);
 
   if (!chat) {
-    addSchedulerLog(runtime, 'error', `Could not find chat "${config.groupName}".`);
+    addSchedulerLog(runtime, 'error', `Could not find chat "${config.groupName}".`, { category: 'schedule' });
     return;
   }
 
@@ -823,23 +824,27 @@ async function sendPatrolMessage(runtime, scheduledAt) {
 
   if (blockReason) {
     appendSendHistory(runtime, buildHistoryEntry('skipped', scheduledAt, config, chat, { reason: blockReason }));
-    addSchedulerLog(runtime, 'info', `Skipped patrol message to "${chat.name}": ${blockReason}`);
+    addSchedulerLog(runtime, 'info', `Skipped scheduled message to "${chat.name}": ${blockReason}`, {
+      category: 'schedule',
+    });
     return;
   }
 
-  addSchedulerLog(runtime, 'info', `Sending patrol message to "${chat.name}".`);
+  addSchedulerLog(runtime, 'info', `Sending scheduled message to "${chat.name}".`, { category: 'schedule' });
 
   try {
     const sentMessage = await chat.sendMessage(config.message);
     const messageId = sentMessage?.id?._serialized || sentMessage?.id?.id || null;
     appendSendHistory(runtime, buildHistoryEntry('sent', scheduledAt, config, chat, { messageId }));
     addSchedulerLog(runtime, 'success', `Message sent to "${chat.name}".`, {
+      category: 'schedule',
       chatName: chat.name,
       messageId,
     });
   } catch (error) {
     appendSendHistory(runtime, buildHistoryEntry('failed', scheduledAt, config, chat, { error: error.message }));
     addSchedulerLog(runtime, 'error', 'Failed to send patrol message. No immediate retry will be attempted.', {
+      category: 'schedule',
       error: error.message,
     });
   }
@@ -916,7 +921,8 @@ async function sendPatrolMessageNow(
   addSchedulerLog(
     runtime,
     'info',
-    `Location trigger: sending patrol message to "${chat.name}"${checkpointName ? ` (${checkpointName})` : ''}.`
+    `Location trigger: sending patrol message to "${chat.name}"${checkpointName ? ` (${checkpointName})` : ''}.`,
+    { category: 'patrol' }
   );
 
   try {
@@ -927,13 +933,17 @@ async function sendPatrolMessageNow(
       buildHistoryEntry('sent', now, config, chat, { message, messageId, source, checkpointName, guard })
     );
     addSchedulerLog(runtime, 'success', `Patrol message sent to "${chat.name}" via ${source}.`, {
+      category: 'patrol',
       chatName: chat.name,
       messageId,
     });
     return { ok: true, chatName: chat.name, messageId };
   } catch (error) {
     appendSendHistory(runtime, buildHistoryEntry('failed', now, config, chat, { message, error: error.message, source }));
-    addSchedulerLog(runtime, 'error', 'Failed to send location-triggered patrol message.', { error: error.message });
+    addSchedulerLog(runtime, 'error', 'Failed to send location-triggered patrol message.', {
+      category: 'patrol',
+      error: error.message,
+    });
     return { ok: false, reason: error.message };
   }
 }
@@ -1073,26 +1083,27 @@ function scheduleNextPatrolMessage(runtime) {
   clearScheduler(runtime);
 
   if (runtime.state.status !== 'ready') {
-    addSchedulerLog(runtime, 'info', 'Scheduler is waiting for WhatsApp to be ready.');
+    addSchedulerLog(runtime, 'info', 'Scheduler is waiting for WhatsApp to be ready.', { category: 'schedule' });
     return;
   }
 
   const config = loadConfigFromPath(runtime.paths.configPath);
 
   if (!config.schedule.enabled) {
-    addSchedulerLog(runtime, 'info', 'Scheduler is disabled. No patrol message is scheduled.');
+    addSchedulerLog(runtime, 'info', 'Automatic scheduled messages are disabled.', { category: 'schedule' });
     return;
   }
 
   const nextSendAt = findNextSendAt(config);
 
   if (!nextSendAt) {
-    addSchedulerLog(runtime, 'error', 'Could not find next patrol send time.');
+    addSchedulerLog(runtime, 'error', 'Could not find next scheduled message time.', { category: 'schedule' });
     return;
   }
 
   const delayMs = nextSendAt.getTime() - Date.now();
   addSchedulerLog(runtime, 'scheduled', `Next patrol message scheduled for ${formatDate(nextSendAt, config.timezone)}.`, {
+    category: 'schedule',
     nextSendAt: nextSendAt.toISOString(),
   });
 
@@ -1100,7 +1111,10 @@ function scheduleNextPatrolMessage(runtime) {
     try {
       await sendPatrolMessage(runtime, nextSendAt);
     } catch (error) {
-      addSchedulerLog(runtime, 'error', 'Failed to send patrol message.', { error: error.message });
+      addSchedulerLog(runtime, 'error', 'Failed to send scheduled message.', {
+        category: 'schedule',
+        error: error.message,
+      });
     } finally {
       scheduleNextPatrolMessage(runtime);
     }
@@ -1555,6 +1569,38 @@ const server = http.createServer(async (request, response) => {
       if (!runtime) return;
 
       sendJson(response, 200, { account: publicAccount(runtime.account), logs: runtime.logs });
+      return;
+    }
+
+    if (request.method === 'DELETE' && pathname === '/api/logs') {
+      const accountId = accountFromUrl(url);
+      if (!requireAccountAuth(request, response, accountId)) return;
+
+      const runtime = requireRuntime(response, accountId);
+      if (!runtime) return;
+
+      const scope = url.searchParams.get('scope') || 'all';
+      if (!['all', 'schedule', 'patrol'].includes(scope)) {
+        sendJson(response, 400, { error: 'scope must be all, schedule, or patrol.' });
+        return;
+      }
+
+      runtime.logs = scope === 'all'
+        ? []
+        : runtime.logs.filter((entry) => entry.category !== scope);
+      const patrolState = loadPatrolState(runtime);
+      if (scope === 'all' || scope === 'patrol') {
+        patrolState.history = [];
+        savePatrolState(runtime, patrolState);
+      }
+
+      // Delivery history and dedupe state are safety records, not visible UI
+      // activity. Keep them so clearing the screen cannot enable duplicates.
+      sendJson(response, 200, {
+        ok: true,
+        logs: runtime.logs,
+        state: publicPatrolState(runtime, patrolState),
+      });
       return;
     }
 

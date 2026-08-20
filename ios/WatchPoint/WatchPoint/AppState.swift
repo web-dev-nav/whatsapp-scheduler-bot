@@ -36,6 +36,7 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var locationAuthorization: CLAuthorizationStatus = .notDetermined
     @Published var isAdminLoading = false
     @Published var isRetrying = false
+    @Published var isClearingActivity = false
     @Published var deletingCheckpointIds: Set<String> = []
     @Published var alertMessage: String?
     @Published var apiCompatibilityMessage: String?
@@ -214,6 +215,7 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// updates behind "patrol is active" made it impossible to ever place
     /// the first checkpoint.
     func requestLocationAccess() {
+        locationAuthorization = locationManager.authorizationStatus
         switch locationManager.authorizationStatus {
         case .notDetermined:
             locationManager.requestWhenInUseAuthorization()
@@ -234,8 +236,25 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     func startPatrol() async {
+        switch locationManager.authorizationStatus {
+        case .notDetermined:
+            locationManager.requestWhenInUseAuthorization()
+            alertMessage = "Allow location access, then tap Start Live Patrol again."
+            return
+        case .denied:
+            alertMessage = "Location access is off for WatchPoint. Open iOS Settings and allow location access before starting patrol."
+            return
+        case .restricted:
+            alertMessage = "Location access is restricted on this device, so live patrol cannot start."
+            return
+        case .authorizedAlways, .authorizedWhenInUse:
+            break
+        @unknown default:
+            alertMessage = "WatchPoint could not determine the location permission. Check iOS Settings and try again."
+            return
+        }
+
         guard await savePatrolState(active: true) else { return }
-        requestLocationAccess()
         locationManager.startUpdatingLocation()
     }
 
@@ -248,8 +267,11 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         locationAuthorization = manager.authorizationStatus
-        if shiftIsActive || locationAuthorization == .authorizedWhenInUse || locationAuthorization == .authorizedAlways {
+        if locationAuthorization == .authorizedWhenInUse || locationAuthorization == .authorizedAlways {
             manager.startUpdatingLocation()
+        } else if locationAuthorization == .denied || locationAuthorization == .restricted {
+            currentLocation = nil
+            manager.stopUpdatingLocation()
         }
     }
 
@@ -261,6 +283,21 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        if let locationError = error as? CLError {
+            switch locationError.code {
+            case .denied:
+                locationAuthorization = manager.authorizationStatus
+                currentLocation = nil
+                manager.stopUpdatingLocation()
+                return
+            case .locationUnknown:
+                // This is temporary. Core Location keeps trying and normally
+                // produces a valid fix without any action from the user.
+                return
+            default:
+                break
+            }
+        }
         presentError(error)
     }
 
@@ -555,6 +592,33 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
             if case let SchedulerAdminError.http(status, _) = error, status == 401 {
                 requireAdminLogin()
             }
+        }
+    }
+
+    @discardableResult
+    func clearActivityLogs(scope: ActivityClearScope) async -> Bool {
+        guard let api = adminAPI else {
+            alertMessage = "Scheduler admin URL is invalid."
+            return false
+        }
+
+        isClearingActivity = true
+        defer { isClearingActivity = false }
+
+        do {
+            let response = try await api.clearActivityLogs(scope: scope)
+            logs = response.logs
+            applyPatrolState(response.state)
+            return response.ok
+        } catch {
+            if case let SchedulerAdminError.http(status, _) = error,
+               status == 404 || status == 405 {
+                apiCompatibilityMessage = "Clear Activity requires Scheduler engine \(AppRelease.requiredEngineVersion) or newer. Update and restart the server, then refresh this app."
+                alertMessage = apiCompatibilityMessage
+                return false
+            }
+            presentError(error)
+            return false
         }
     }
 

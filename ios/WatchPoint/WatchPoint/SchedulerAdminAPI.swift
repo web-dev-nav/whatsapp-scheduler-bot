@@ -126,6 +126,15 @@ struct SchedulerAdminAPI {
         return response.logs
     }
 
+    func clearActivityLogs(scope: ActivityClearScope) async throws -> ClearActivityResponse {
+        try await request(
+            path: "/api/logs",
+            method: "DELETE",
+            query: ["account": accountId, "scope": scope.rawValue],
+            authorized: true
+        )
+    }
+
     func patrolState() async throws -> PatrolStateResponse {
         try await request(path: "/api/patrol/state", query: ["account": accountId], authorized: true)
     }

@@ -10,14 +10,14 @@ import Foundation
 let productionSchedulerAdminURL = "https://hp-server.tailed5092.ts.net:10000"
 
 enum AppRelease {
-    static let requiredEngineVersion = "1.2.0"
+    static let requiredEngineVersion = "1.3.0"
 
     static var version: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.2"
     }
 
     static var build: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "3"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "5"
     }
 
     static var displayVersion: String { "\(version) (\(build))" }
@@ -308,6 +308,7 @@ struct ConfigUpdateRequest: Encodable {
 struct SchedulerLogEntry: Decodable, Identifiable, Hashable {
     let id: String
     let type: String
+    let category: String?
     let message: String
     let timestamp: String
     let label: String
@@ -315,8 +316,28 @@ struct SchedulerLogEntry: Decodable, Identifiable, Hashable {
     let accountName: String?
 }
 
+enum ActivityClearScope: String {
+    case all
+    case schedule
+    case patrol
+
+    var title: String {
+        switch self {
+        case .all: return "All Activity"
+        case .schedule: return "Scheduled Activity"
+        case .patrol: return "Patrol Activity"
+        }
+    }
+}
+
 struct LogsResponse: Decodable {
     let logs: [SchedulerLogEntry]
+}
+
+struct ClearActivityResponse: Decodable {
+    let ok: Bool
+    let logs: [SchedulerLogEntry]
+    let state: PatrolStateResponse
 }
 
 let weekdayLabels: [(value: Int, short: String)] = [

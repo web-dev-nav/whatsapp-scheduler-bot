@@ -11,20 +11,76 @@ WatchPoint supports a shared-device, multi-guard workflow. Each Scheduler accoun
 
 > This project uses `whatsapp-web.js`, which automates a linked WhatsApp Web session. It is not the official WhatsApp Business API.
 
-## Architecture
+## How WatchPoint Works
+
+WatchPoint has three main pieces:
+
+1. **The iPhone app** is what the guard sees and uses. It shows the map, reads the phone's GPS location, and lets the guard manage accounts, checkpoints, schedules, and messages.
+2. **The Scheduler server** does the important background work. It stores each guard's settings, decides when a message may be sent, keeps patrol history, and maintains the linked WhatsApp session.
+3. **WhatsApp** receives messages from the Scheduler server. The iPhone never talks directly to WhatsApp.
+
+The normal flow is:
 
 ```text
-WatchPoint iOS                         Scheduler API (Node.js)
-  • SwiftUI screens     HTTPS/JSON       • authentication
-  • Keychain token  ──────────────────>  • account-scoped persistence
-  • device GPS samples                   • checkpoints and patrol sessions
-  • map and forms      <────────────────  • GPS transition/dedupe engine
-                                          • schedules, history, and logs
-                                          • WhatsApp Web sessions
-                                                    │
-                                                    ▼
-                                                WhatsApp
+Guard uses WatchPoint on iPhone
+              │
+              │ secure HTTPS request
+              ▼
+Scheduler server checks the account, rules and settings
+              │
+              │ sends through the linked WhatsApp Web session
+              ▼
+Selected WhatsApp group or chat receives the message
+              │
+              ▼
+Result and activity history appear in WatchPoint
 ```
+
+There is **no n8n service between the iPhone and WhatsApp**. The current iOS flow is simply:
+
+```text
+WatchPoint iOS → Scheduler API → WhatsApp
+```
+
+The `n8n/` directory and `/api/patrol/trigger` endpoint remain only for optional legacy integrations. WatchPoint iOS does not use them.
+
+### Automatic-message flow
+
+```text
+Guard saves an automatic message and schedule
+              ↓
+Scheduler stores them under that guard's account
+              ↓
+Scheduler waits for an allowed scheduled time
+              ↓
+Scheduler sends the automatic message to the shared WhatsApp destination
+              ↓
+The send result is recorded in activity history
+```
+
+Automatic sending continues on the server even when the iPhone app is not open.
+
+### Patrol-message flow
+
+```text
+Guard starts a patrol in WatchPoint
+              ↓
+iPhone sends GPS samples to the Scheduler API
+              ↓
+Scheduler checks distance, GPS accuracy, checkpoint entry and cooldown
+              ↓
+When the guard enters a checkpoint, Scheduler sends the patrol message
+              ↓
+Checkpoint, guard and delivery details are saved in patrol history
+```
+
+The automatic message and patrol message have separate text. They share the same WhatsApp destination and minimum message interval configured under **Shared Delivery Settings**.
+
+### Accounts and saved information
+
+Each guard account is separate. Its WhatsApp login, messages, schedule, checkpoints, patrol state, settings, and history are stored on the Scheduler server. Switching guards in the iPhone app loads the selected account's information and stops the previous guard's active patrol.
+
+The iPhone stores only connection information needed to use the server: the API address, selected-account pointer, and temporary login tokens in the Keychain. The server remains the source of truth.
 
 The iOS app currently defaults to:
 
@@ -118,6 +174,7 @@ Login is limited to five failed attempts per account and IP in 15 minutes, follo
 | `PUT` | `/api/config?account=<id>` | Account token | Save shared delivery, automatic-message, patrol-message, and schedule configuration |
 | `POST` | `/api/config/preview` | None | Preview a proposed schedule without saving |
 | `GET` | `/api/logs?account=<id>` | Account token | Read scheduler activity |
+| `DELETE` | `/api/logs?account=<id>&scope=all|schedule|patrol` | Account token | Clear the chosen visible activity category; retain delivery safeguards |
 | `GET` | `/api/patrol/state?account=<id>` | Account token | Read profile, settings, checkpoints, history, and patrol session |
 | `PUT` | `/api/patrol/state?account=<id>` | Account token | Save profile, settings, checkpoints, and active-patrol state |
 | `POST` | `/api/patrol/import?account=<id>` | Account token | One-time import of legacy iOS patrol data into an empty server state |
@@ -155,6 +212,7 @@ Scheduler entries returned by `GET /api/logs?account=<id>` include stable struct
 {
   "id": "1787144400000-a1b2c3",
   "type": "success",
+  "category": "patrol",
   "message": "Patrol message sent to \"Operations\" via watchpoint-ios.",
   "timestamp": "2026-08-19T13:00:00.000Z",
   "label": "Aug 19, 2026, 9:00:00 AM",
@@ -435,7 +493,7 @@ The iOS app consumes `/api/health`, structured scheduler logs, and every authent
 
 Engine `1.2.0` introduces account-level shared delivery settings. `groupName` and `delivery.minMessageIntervalMinutes` apply to both automatic and patrol-arrival messages, while their message bodies remain separate. Older configs normalize the shared interval to zero, preventing the former automatic-scheduler 75-minute floor from blocking checkpoints in the same patrol. Older clients preserve these server fields during unrelated config saves.
 
-WatchPoint iOS `1.2 (3)` displays its bundle version, minimum iOS version, live Scheduler engine version, required engine version, compatibility, API reachability, WhatsApp status, and account diagnostics together on **System Status & Versions**. The app requires engine `1.2.0` or newer; `/api/health.minimumIOSVersion` lets the engine also require a newer app. Startup health and account discovery run concurrently, then WhatsApp status, configuration, logs, and patrol state load concurrently after the selected account is confirmed.
+WatchPoint iOS `1.2 (5)` displays its bundle version, minimum iOS version, live Scheduler engine version, required engine version, compatibility, API reachability, WhatsApp status, and account diagnostics together on **System Status & Versions**. Build 5 uses a full-screen map picker so the user can pan and zoom beneath a fixed checkpoint marker. Activity is separated into **All**, **Scheduled**, and **Patrol** views, with confirmed actions to clear scheduled activity, patrol activity, or everything. Clearing activity keeps checkpoints, settings, WhatsApp connection, delivery history, and duplicate-send safeguards. The app requires engine `1.3.0` or newer; `/api/health.minimumIOSVersion` lets the engine also require a newer app. Startup health and account discovery run concurrently, then WhatsApp status, configuration, logs, and patrol state load concurrently after the selected account is confirmed.
 
 ### Implementation Record — 2026-08-19
 

@@ -11,6 +11,7 @@
 import CoreLocation
 import MapKit
 import SwiftUI
+import UIKit
 
 /// Tracks the fixed reference point a radius drag started from, so each
 /// `.onChanged` can compute an absolute new position (start + cumulative
@@ -20,8 +21,99 @@ private struct RadiusDragState {
     let handleStartScreenPoint: CGPoint
 }
 
+/// Full-screen placement avoids the gesture conflict between a compact Map
+/// embedded in a vertical ScrollView. The map remains freely pannable and the
+/// fixed crosshair makes the selected coordinate unambiguous.
+private struct CheckpointPlacementView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var position: MapCameraPosition
+
+    let checkpoints: [Checkpoint]
+    let onPlace: (CLLocationCoordinate2D) -> Void
+
+    init(
+        initialPosition: MapCameraPosition,
+        checkpoints: [Checkpoint],
+        onPlace: @escaping (CLLocationCoordinate2D) -> Void
+    ) {
+        _position = State(initialValue: initialPosition)
+        self.checkpoints = checkpoints
+        self.onPlace = onPlace
+    }
+
+    var body: some View {
+        NavigationStack {
+            MapReader { proxy in
+                GeometryReader { geometry in
+                    ZStack {
+                        Map(position: $position, interactionModes: .all) {
+                            UserAnnotation()
+                            ForEach(checkpoints) { checkpoint in
+                                Marker(
+                                    checkpoint.name,
+                                    coordinate: CLLocationCoordinate2D(
+                                        latitude: checkpoint.latitude,
+                                        longitude: checkpoint.longitude
+                                    )
+                                )
+                                .tint(.green)
+                            }
+                        }
+                        .mapControls {
+                            MapUserLocationButton()
+                            MapCompass()
+                            MapScaleView()
+                        }
+
+                        VStack(spacing: 0) {
+                            Spacer()
+                            Image(systemName: "plus")
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 34, height: 34)
+                                .background(.green, in: Circle())
+                                .overlay(Circle().stroke(.white, lineWidth: 3))
+                                .shadow(radius: 3)
+                            Spacer()
+                        }
+                        .allowsHitTesting(false)
+
+                        VStack {
+                            Spacer()
+                            Button {
+                                let centerPoint = CGPoint(
+                                    x: geometry.size.width / 2,
+                                    y: geometry.size.height / 2
+                                )
+                                guard let coordinate = proxy.convert(centerPoint, from: .local) else { return }
+                                onPlace(coordinate)
+                                dismiss()
+                            } label: {
+                                Label("Place Checkpoint Here", systemImage: "mappin.and.ellipse")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.large)
+                            .padding()
+                            .background(.regularMaterial)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Choose Checkpoint Location")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
 struct PatrolTab: View {
     @ObservedObject var appState: AppState
+    @Environment(\.openURL) private var openURL
     @Binding var selectedTab: AppTab
     @State private var mapPosition: MapCameraPosition = .region(
         MKCoordinateRegion(
@@ -32,7 +124,7 @@ struct PatrolTab: View {
     @State private var hasCenteredOnUser = false
     @State private var lastAddedCheckpointId: String?
     @State private var radiusDrag: RadiusDragState?
-    @State private var isPlacingCheckpoint = false
+    @State private var showCheckpointPlacement = false
 
     var body: some View {
         NavigationStack {
@@ -79,6 +171,28 @@ struct PatrolTab: View {
                         span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
                     )
                 )
+            }
+            .fullScreenCover(isPresented: $showCheckpointPlacement) {
+                CheckpointPlacementView(
+                    initialPosition: mapPosition,
+                    checkpoints: appState.checkpoints
+                ) { coordinate in
+                    Task {
+                        let checkpointId = await appState.addCheckpoint(
+                            latitude: coordinate.latitude,
+                            longitude: coordinate.longitude
+                        )
+                        if checkpointId != nil {
+                            lastAddedCheckpointId = checkpointId
+                            mapPosition = .region(
+                                MKCoordinateRegion(
+                                    center: coordinate,
+                                    span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+                                )
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -164,6 +278,14 @@ struct PatrolTab: View {
             }
 
             LabeledContent("Location Access", value: authorizationLabel(appState.locationAuthorization))
+            if appState.locationAuthorization == .denied {
+                Button {
+                    guard let settingsURL = URL(string: UIApplication.openSettingsURLString) else { return }
+                    openURL(settingsURL)
+                } label: {
+                    Label("Open Location Settings", systemImage: "gear")
+                }
+            }
             if let location = appState.currentLocation {
                 LabeledContent("GPS Accuracy", value: "\(Int(location.horizontalAccuracy)) m")
             }
@@ -202,7 +324,7 @@ struct PatrolTab: View {
         VStack(alignment: .leading, spacing: 10) {
             Label("Checkpoints", systemImage: "map")
                 .font(.headline)
-            Text("Choose Add Anywhere, then tap the map where the checkpoint should be. Drag the white handle on its circle to resize the radius.")
+            Text("Choose Add Anywhere, move the map under the crosshair, then place the checkpoint. Drag the white handle on its circle to resize the radius.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -225,46 +347,16 @@ struct PatrolTab: View {
                     MapUserLocationButton()
                     MapCompass()
                 }
-                // Map consumes its own tap/pan gestures. A simultaneous
-                // SpatialTapGesture makes checkpoint placement reliable at
-                // arbitrary coordinates without disabling map navigation.
-                .simultaneousGesture(SpatialTapGesture().onEnded { value in
-                    guard isPlacingCheckpoint else { return }
-                    let point = value.location
-                    if let coordinate = proxy.convert(point, from: .local) {
-                        Task {
-                            let checkpointId = await appState.addCheckpoint(
-                                latitude: coordinate.latitude,
-                                longitude: coordinate.longitude
-                            )
-                            if checkpointId != nil {
-                                lastAddedCheckpointId = checkpointId
-                                isPlacingCheckpoint = false
-                            }
-                        }
-                    }
-                })
-                .overlay(alignment: .top) {
-                    if isPlacingCheckpoint {
-                        Label("Tap anywhere on the map", systemImage: "mappin.and.ellipse")
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(.regularMaterial, in: Capsule())
-                            .padding(10)
-                            .allowsHitTesting(false)
-                    }
-                }
             }
             .frame(height: 260)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
             Button {
-                isPlacingCheckpoint.toggle()
+                showCheckpointPlacement = true
             } label: {
                 Label(
-                    isPlacingCheckpoint ? "Cancel Map Placement" : "Add Checkpoint Anywhere",
-                    systemImage: isPlacingCheckpoint ? "xmark" : "mappin.and.ellipse"
+                    "Add Checkpoint Anywhere",
+                    systemImage: "mappin.and.ellipse"
                 )
                 .frame(maxWidth: .infinity)
             }
