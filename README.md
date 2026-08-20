@@ -475,6 +475,28 @@ Both `whatsapp-scheduler.service` and `tailscale-admin-funnel.service` were rest
 
 At the end of deployment, API/Funnel health was good but `/api/health` still reported `connectedAccounts: 0`. One controlled Scheduler retry did not restore WhatsApp readiness. The production log shows WhatsApp browser startup failures began before this deployment, and direct access to `web.whatsapp.com` succeeds, so this is tracked as a pre-existing saved-session/browser recovery issue rather than an API rollout failure. Do not delete `.wwebjs_auth`; use the iOS Account screen to inspect status and re-link WhatsApp only if the saved session does not recover. `npm ci` also reported eight high-severity transitive dependency findings; no automatic audit fix was applied because forced dependency changes could be breaking and require a separate reviewed upgrade.
 
+### Pending 1.2.0 Server Handoff — 2026-08-20
+
+Production remains on engine `1.1.0`. A `1.2.0` server fix has been described but is not present in this checkout, any local branch, or `origin/main`; do not pull or restart production for this handoff until the actual implementation commit has been pushed and reviewed.
+
+The expected `1.2.0` contract is:
+
+- one shared WhatsApp destination for scheduled and patrol delivery;
+- one shared minimum-message interval, defaulting to **No wait**;
+- separate patrol and scheduled message content/flows;
+- removal of the old 75-minute patrol restriction;
+- backward-compatible normalization of existing `1.1.0` configuration.
+
+After the implementation commit becomes available:
+
+1. Review the diff and verify the config migration against a copy of production `config.json`.
+2. Run `npm ci`, `npm run check`, schedule-generation tests, and isolated patrol/scheduled-send guard tests.
+3. Commit/push any required review fixes before production deployment.
+4. Stop `whatsapp-scheduler.service`, back up the complete `DATA_DIR`, pull the reviewed commit, and run `npm ci`.
+5. Start `whatsapp-scheduler.service` and `tailscale-admin-funnel.service`.
+6. Confirm external `/api/health` returns `200` with `"engineVersion":"1.2.0"` and confirm authenticated config round-tripping preserves both message flows.
+7. Log into the iOS account again if the API restart invalidates its token, then use **Activity → Retry Queue** for failed patrol entries.
+
 ## Planned iOS Additions
 
 WatchPoint's shared-device, multi-guard model (see Architecture) raises two gaps not yet addressed:
