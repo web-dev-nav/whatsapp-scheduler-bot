@@ -54,6 +54,8 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyBest
         locationManager.distanceFilter = 10
+        locationManager.activityType = .fitness
+        locationManager.pausesLocationUpdatesAutomatically = false
         locationAuthorization = locationManager.authorizationStatus
         isAppLocked = appLockEnabled
     }
@@ -220,6 +222,7 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         case .notDetermined:
             locationManager.requestWhenInUseAuthorization()
         case .authorizedWhenInUse, .authorizedAlways:
+            configureBackgroundLocation(forActivePatrol: shiftIsActive)
             locationManager.startUpdatingLocation()
         default:
             break
@@ -248,6 +251,11 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
             alertMessage = "Location access is restricted on this device, so live patrol cannot start."
             return
         case .authorizedAlways, .authorizedWhenInUse:
+            if locationManager.authorizationStatus == .authorizedWhenInUse {
+                // Upgrade is requested at the moment the guard starts a
+                // feature that clearly needs background location.
+                locationManager.requestAlwaysAuthorization()
+            }
             break
         @unknown default:
             alertMessage = "WatchPoint could not determine the location permission. Check iOS Settings and try again."
@@ -255,12 +263,14 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
 
         guard await savePatrolState(active: true) else { return }
+        configureBackgroundLocation(forActivePatrol: true)
         locationManager.startUpdatingLocation()
     }
 
     @discardableResult
     func stopPatrol() async -> Bool {
         guard await savePatrolState(active: false) else { return false }
+        configureBackgroundLocation(forActivePatrol: false)
         locationManager.stopUpdatingLocation()
         return true
     }
@@ -268,6 +278,7 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         locationAuthorization = manager.authorizationStatus
         if locationAuthorization == .authorizedWhenInUse || locationAuthorization == .authorizedAlways {
+            configureBackgroundLocation(forActivePatrol: shiftIsActive)
             manager.startUpdatingLocation()
         } else if locationAuthorization == .denied || locationAuthorization == .restricted {
             currentLocation = nil
@@ -711,6 +722,15 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         checkpoints = state.checkpoints
         history = state.history
         shiftIsActive = state.session.active
+        configureBackgroundLocation(forActivePatrol: state.session.active)
+    }
+
+    private func configureBackgroundLocation(forActivePatrol active: Bool) {
+        // The project declares UIBackgroundModes=location. Enabling this
+        // only for a live patrol prevents map browsing from becoming
+        // continuous background tracking.
+        locationManager.allowsBackgroundLocationUpdates = active
+        locationManager.showsBackgroundLocationIndicator = active
     }
 
     private func submitLocation(_ location: CLLocation) async {

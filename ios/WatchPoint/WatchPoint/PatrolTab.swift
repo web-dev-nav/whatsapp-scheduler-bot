@@ -278,6 +278,14 @@ struct PatrolTab: View {
             }
 
             LabeledContent("Location Access", value: authorizationLabel(appState.locationAuthorization))
+            if appState.shiftIsActive {
+                Label(
+                    "Background patrol is active. You can lock or minimize the app.",
+                    systemImage: "lock.open.display"
+                )
+                .font(.caption)
+                .foregroundStyle(.green)
+            }
             if appState.locationAuthorization == .denied {
                 Button {
                     guard let settingsURL = URL(string: UIApplication.openSettingsURLString) else { return }

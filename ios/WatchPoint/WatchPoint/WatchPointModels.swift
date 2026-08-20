@@ -17,7 +17,7 @@ enum AppRelease {
     }
 
     static var build: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "5"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "6"
     }
 
     static var displayVersion: String { "\(version) (\(build))" }
