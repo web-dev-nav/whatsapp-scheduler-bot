@@ -453,6 +453,13 @@ function normalizePatrolState(runtime, input) {
     state.dedupe?.lastSentAtByCheckpoint && typeof state.dedupe.lastSentAtByCheckpoint === 'object'
       ? state.dedupe.lastSentAtByCheckpoint
       : {};
+  const activeCheckpointIds = new Set(checkpoints.map((checkpoint) => checkpoint.id));
+  const normalizedInsideState = Object.fromEntries(
+    Object.entries(insideState).filter(([checkpointId]) => activeCheckpointIds.has(checkpointId))
+  );
+  const normalizedLastSentAt = Object.fromEntries(
+    Object.entries(lastSentAtByCheckpoint).filter(([checkpointId]) => activeCheckpointIds.has(checkpointId))
+  );
 
   return {
     version: 1,
@@ -477,7 +484,7 @@ function normalizePatrolState(runtime, input) {
       active: state.session?.active === true,
       updatedAt: typeof state.session?.updatedAt === 'string' ? state.session.updatedAt : null,
     },
-    dedupe: { insideState, lastSentAtByCheckpoint },
+    dedupe: { insideState: normalizedInsideState, lastSentAtByCheckpoint: normalizedLastSentAt },
   };
 }
 
@@ -1573,6 +1580,10 @@ const server = http.createServer(async (request, response) => {
       const payload = JSON.parse(body || '{}');
       const state = loadPatrolState(runtime);
       let checkpointsImported = false;
+      const profileIsDefault = state.profile.name === runtime.account.name;
+      const settingsAreDefault =
+        state.settings.accuracyThresholdMeters === DEFAULT_PATROL_SETTINGS.accuracyThresholdMeters &&
+        state.settings.checkpointCooldownMinutes === DEFAULT_PATROL_SETTINGS.checkpointCooldownMinutes;
 
       if (state.checkpoints.length === 0 && Array.isArray(payload.checkpoints)) {
         state.checkpoints = payload.checkpoints;
@@ -1581,10 +1592,10 @@ const server = http.createServer(async (request, response) => {
       if (state.history.length === 0 && Array.isArray(payload.history)) {
         state.history = payload.history.filter((event) => event && typeof event === 'object').slice(0, 200);
       }
-      if (state.profile.name === runtime.account.name && payload.profile?.name) {
+      if (profileIsDefault && payload.profile?.name) {
         state.profile = payload.profile;
       }
-      if (payload.settings && typeof payload.settings === 'object') {
+      if (settingsAreDefault && payload.settings && typeof payload.settings === 'object') {
         state.settings = payload.settings;
       }
 

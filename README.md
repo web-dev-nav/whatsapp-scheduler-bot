@@ -463,6 +463,10 @@ The patrol domain was moved from iOS local storage and the n8n send path into th
 
 Server validation completed with `npm run check`, `git diff --check`, and isolated authenticated smoke tests covering legacy import, state creation, checkpoint/settings persistence, patrol start, inaccurate-location rejection, accurate checkpoint entry, concurrent duplicate suppression, event persistence, engine-not-ready delivery status, and retry-count persistence. Xcode verification is still required on macOS before release.
 
+### Recheck Record — 2026-08-20
+
+A clean re-audit against `origin/main` repeated JavaScript validation and authenticated API tests for health, normalized state writes, accuracy filtering, concurrent transition deduplication, manual-coordinate fallback, retries, history, and persistence across a process restart. The review also tightened two state rules: dedupe entries for deleted checkpoints are pruned during normalization, and one-time legacy import only replaces profile/settings while those server fields still have their defaults. Existing customized server settings remain authoritative. Targeted follow-up tests confirmed both dedupe pruning after checkpoint deletion and protection of customized profile/settings during legacy import.
+
 ## Planned iOS Additions
 
 WatchPoint's shared-device, multi-guard model (see Architecture) raises two gaps not yet addressed:
