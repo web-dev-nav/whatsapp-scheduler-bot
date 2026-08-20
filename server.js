@@ -20,6 +20,7 @@ const {
 
 const HOST = process.env.HOST || '127.0.0.1';
 const PORT = Number(process.env.PORT || 3000);
+const MINIMUM_IOS_VERSION = String(process.env.MINIMUM_IOS_VERSION || '1.2').trim();
 const DATA_DIR = path.resolve(process.env.DATA_DIR || __dirname);
 const PATROL_TRIGGER_TOKEN = (process.env.PATROL_TRIGGER_TOKEN || '').trim();
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -1396,6 +1397,7 @@ function buildHealthResponse() {
   return {
     status: shuttingDown ? 'shutting_down' : 'ok',
     engineVersion: ENGINE_VERSION,
+    minimumIOSVersion: MINIMUM_IOS_VERSION,
     nodeVersion: process.version,
     startedAt: startedAt.toISOString(),
     uptimeSeconds: Math.floor((now - startedAt.getTime()) / 1000),

@@ -35,6 +35,23 @@ struct HostStatusView: View {
 
     var body: some View {
         Form {
+            Section("Versions & Compatibility") {
+                LabeledContent("WatchPoint iOS", value: AppRelease.displayVersion)
+                LabeledContent("Minimum iOS", value: engineHealth?.minimumIOSVersion ?? "Checking…")
+                LabeledContent("Scheduler Engine", value: engineHealth?.engineVersion ?? "Checking…")
+                LabeledContent("Required Engine", value: AppRelease.requiredEngineVersion)
+                HStack {
+                    Label(
+                        appState.versionCompatibilityLabel,
+                        systemImage: appState.versionCompatibilityLabel == "Up to date"
+                            ? "checkmark.circle.fill"
+                            : "exclamationmark.triangle.fill"
+                    )
+                    .foregroundStyle(appState.versionCompatibilityLabel == "Up to date" ? .green : .orange)
+                    Spacer()
+                }
+            }
+
             Section("This Account") {
                 LabeledContent("Guard", value: appState.guardName)
                 LabeledContent("Account", value: currentAccountName)
@@ -72,7 +89,6 @@ struct HostStatusView: View {
             Section {
                 if let health = engineHealth {
                     LabeledContent("Status", value: health.status.capitalized)
-                    LabeledContent("Engine", value: health.engineVersion)
                     LabeledContent("Node", value: health.nodeVersion)
                     LabeledContent("Uptime", value: uptimeLabel(health.uptimeSeconds))
                     LabeledContent("WhatsApp Accounts", value: "\(health.connectedAccounts) / \(health.totalAccounts) connected")
@@ -85,8 +101,9 @@ struct HostStatusView: View {
             } header: {
                 Text("Engine Diagnostics")
             }
+
         }
-        .navigationTitle("Host & Connection")
+        .navigationTitle("System Status & Versions")
         .navigationBarTitleDisplayMode(.inline)
         .task { await runChecks() }
     }
@@ -162,12 +179,13 @@ struct HostStatusView: View {
                 token: ""
             )
             let health = try await api.health()
-            appState.apiCompatibilityMessage = nil
+            appState.recordSchedulerHealth(health)
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
+            let isCompatible = AppRelease.isVersion(health.engineVersion, atLeast: AppRelease.requiredEngineVersion)
             return (
                 ReachabilityResult(
-                    level: health.status == "ok" ? .healthy : .failed,
-                    detail: "API \(health.status)",
+                    level: health.status != "ok" ? .failed : isCompatible ? .healthy : .warning,
+                    detail: isCompatible ? "API \(health.status)" : "API reachable — engine update required",
                     roundTripMs: elapsedMs,
                     checkedAt: Date()
                 ),

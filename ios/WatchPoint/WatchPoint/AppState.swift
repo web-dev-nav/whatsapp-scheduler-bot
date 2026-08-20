@@ -28,6 +28,7 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var history: [PatrolEvent] = []
     @Published var adminAccounts: [SchedulerAccount] = []
     @Published var whatsAppState: WhatsAppAdminState?
+    @Published var schedulerHealth: SchedulerHealth?
     @Published var patrolConfig: PatrolConfig?
     @Published var isConfigLoading = false
     @Published var logs: [SchedulerLogEntry] = []
@@ -69,6 +70,18 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
     var guardDisplayName: String {
         let trimmed = guardName.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "this guard" : trimmed
+    }
+
+    var versionCompatibilityLabel: String {
+        guard let health = schedulerHealth else { return "Engine not checked" }
+        if !AppRelease.isVersion(health.engineVersion, atLeast: AppRelease.requiredEngineVersion) {
+            return "Server update required"
+        }
+        if let minimumIOSVersion = health.minimumIOSVersion,
+           !AppRelease.isVersion(AppRelease.version, atLeast: minimumIOSVersion) {
+            return "iOS update required"
+        }
+        return "Up to date"
     }
 
     func setAppLockEnabled(_ enabled: Bool) {
@@ -345,6 +358,42 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
+    /// One startup owner prevents every TabView child from issuing the same
+    /// requests. Health runs alongside account discovery; selected-account
+    /// reads then fan out in parallel once account identity is known.
+    func bootstrap() async {
+        async let health: Void = refreshEngineHealth()
+        await fetchAdminAccounts()
+        if !adminToken.isEmpty {
+            await selectAccount(selectedAdminAccountId, confirmsGuard: false)
+        }
+        _ = await health
+    }
+
+    func refreshEngineHealth() async {
+        guard let api = adminAPI else { return }
+        do {
+            recordSchedulerHealth(try await api.health())
+        } catch {
+            schedulerHealth = nil
+            if case let SchedulerAdminError.http(status, _) = error, status == 404 || status == 405 {
+                apiCompatibilityMessage = "This Scheduler API is too old. Engine \(AppRelease.requiredEngineVersion) or newer is required."
+            }
+        }
+    }
+
+    func recordSchedulerHealth(_ health: SchedulerHealth) {
+        schedulerHealth = health
+        if !AppRelease.isVersion(health.engineVersion, atLeast: AppRelease.requiredEngineVersion) {
+            apiCompatibilityMessage = "Scheduler engine \(health.engineVersion) is outdated. Update the server to \(AppRelease.requiredEngineVersion) or newer."
+        } else if let minimumIOSVersion = health.minimumIOSVersion,
+                  !AppRelease.isVersion(AppRelease.version, atLeast: minimumIOSVersion) {
+            apiCompatibilityMessage = "WatchPoint \(AppRelease.version) is outdated. Install iOS version \(minimumIOSVersion) or newer."
+        } else {
+            apiCompatibilityMessage = nil
+        }
+    }
+
     func loginAdmin(password: String) async {
         guard let api = adminAPI else {
             alertMessage = "Scheduler admin URL is invalid."
@@ -514,7 +563,7 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         do {
             let state = try await api.patrolState()
             applyPatrolState(try await migrateLegacyPatrolStateIfNeeded(state, api: api))
-            apiCompatibilityMessage = nil
+            if let schedulerHealth { recordSchedulerHealth(schedulerHealth) }
         } catch {
             if presentPatrolCompatibilityError(error) { return }
             presentError(error)

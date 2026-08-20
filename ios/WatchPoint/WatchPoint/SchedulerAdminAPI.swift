@@ -55,6 +55,7 @@ struct AdminErrorResponse: Codable {
 struct SchedulerHealth: Codable {
     let status: String
     let engineVersion: String
+    let minimumIOSVersion: String?
     let nodeVersion: String
     let startedAt: String
     let uptimeSeconds: Int

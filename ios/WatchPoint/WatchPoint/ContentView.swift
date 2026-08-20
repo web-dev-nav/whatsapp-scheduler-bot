@@ -36,7 +36,11 @@ struct ContentView: View {
                 appState.lockApp()
             case .active:
                 appState.refreshGuardReconfirmationRequirement()
-                Task { await appState.unlockApp() }
+                Task {
+                    async let unlock: Void = appState.unlockApp()
+                    async let health: Void = appState.refreshEngineHealth()
+                    _ = await (unlock, health)
+                }
             default:
                 break
             }
@@ -73,10 +77,7 @@ struct ContentView: View {
             }
         }
         .task {
-            if !appState.adminToken.isEmpty {
-                await appState.fetchAdminAccounts()
-                await appState.selectAccount(appState.selectedAdminAccountId, confirmsGuard: false)
-            }
+            await appState.bootstrap()
         }
     }
 

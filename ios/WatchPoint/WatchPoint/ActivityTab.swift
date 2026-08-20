@@ -34,7 +34,6 @@ struct ActivityTab: View {
             }
             .navigationTitle("Activity")
             .refreshable { await appState.fetchLogs() }
-            .task { await appState.fetchLogs() }
         }
     }
 

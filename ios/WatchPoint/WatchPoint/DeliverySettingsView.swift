@@ -66,11 +66,10 @@ struct DeliverySettingsView: View {
         .keyboardDoneButton()
         .scrollDismissesKeyboard(.interactively)
         .task {
-            if appState.patrolConfig == nil, !appState.adminToken.isEmpty {
-                await appState.fetchConfig()
-            }
             if !appState.adminToken.isEmpty {
-                await appState.refreshWhatsAppStatus()
+                async let config: Void = appState.fetchConfig()
+                async let status: Void = appState.refreshWhatsAppStatus()
+                _ = await (config, status)
             }
             loadDraftIfNeeded()
         }

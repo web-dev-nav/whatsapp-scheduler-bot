@@ -136,6 +136,7 @@ Example response:
 {
   "status": "ok",
   "engineVersion": "1.2.0",
+  "minimumIOSVersion": "1.2",
   "nodeVersion": "v26.0.0",
   "startedAt": "2026-08-19T12:00:00.000Z",
   "uptimeSeconds": 3600,
@@ -433,6 +434,8 @@ For an end-to-end release, verify:
 The iOS app consumes `/api/health`, structured scheduler logs, and every authenticated patrol endpoint documented above. Keep these fields backward compatible when evolving the server. New response fields may be added, but existing field names and types should not change without updating `SchedulerAdminAPI.swift`, `WatchPointModels.swift`, and this contract together. Every iOS mutation must use the state returned by the API rather than assuming the submitted value was accepted unchanged.
 
 Engine `1.2.0` introduces account-level shared delivery settings. `groupName` and `delivery.minMessageIntervalMinutes` apply to both automatic and patrol-arrival messages, while their message bodies remain separate. Older configs normalize the shared interval to zero, preventing the former automatic-scheduler 75-minute floor from blocking checkpoints in the same patrol. Older clients preserve these server fields during unrelated config saves.
+
+WatchPoint iOS `1.2 (3)` displays its bundle version, minimum iOS version, live Scheduler engine version, required engine version, compatibility, API reachability, WhatsApp status, and account diagnostics together on **System Status & Versions**. The app requires engine `1.2.0` or newer; `/api/health.minimumIOSVersion` lets the engine also require a newer app. Startup health and account discovery run concurrently, then WhatsApp status, configuration, logs, and patrol state load concurrently after the selected account is confirmed.
 
 ### Implementation Record — 2026-08-19
 

@@ -48,7 +48,7 @@ struct AccountTab: View {
                     NavigationLink("Patrol Arrival Message") {
                         PatrolMessageView(appState: appState)
                     }
-                    NavigationLink("Host & Connection") {
+                    NavigationLink("System Status & Versions") {
                         HostStatusView(appState: appState)
                     }
                     NavigationLink("Preferences") {
@@ -65,10 +65,6 @@ struct AccountTab: View {
             }
             .task {
                 if appState.requiresAdminLogin { showWhatsAppSession = true }
-                await appState.fetchAdminAccounts()
-                if !appState.adminToken.isEmpty {
-                    await appState.refreshWhatsAppStatus()
-                }
             }
         }
     }

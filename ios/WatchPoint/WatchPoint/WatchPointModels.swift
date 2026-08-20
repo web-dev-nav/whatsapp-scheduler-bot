@@ -9,6 +9,24 @@ import Foundation
 
 let productionSchedulerAdminURL = "https://hp-server.tailed5092.ts.net:10000"
 
+enum AppRelease {
+    static let requiredEngineVersion = "1.2.0"
+
+    static var version: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.2"
+    }
+
+    static var build: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "3"
+    }
+
+    static var displayVersion: String { "\(version) (\(build))" }
+
+    static func isVersion(_ version: String, atLeast requiredVersion: String) -> Bool {
+        version.compare(requiredVersion, options: .numeric) != .orderedAscending
+    }
+}
+
 struct GuardProfile: Codable, Hashable {
     var name: String
 }
