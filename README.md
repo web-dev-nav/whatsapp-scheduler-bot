@@ -467,6 +467,14 @@ Server validation completed with `npm run check`, `git diff --check`, and isolat
 
 A clean re-audit against `origin/main` repeated JavaScript validation and authenticated API tests for health, normalized state writes, accuracy filtering, concurrent transition deduplication, manual-coordinate fallback, retries, history, and persistence across a process restart. The review also tightened two state rules: dedupe entries for deleted checkpoints are pruned during normalization, and one-time legacy import only replaces profile/settings while those server fields still have their defaults. Existing customized server settings remain authoritative. Targeted follow-up tests confirmed both dedupe pruning after checkpoint deletion and protection of customized profile/settings during legacy import.
 
+### Production Deployment Record — 2026-08-20
+
+Commit `6de3122` (including the API-first work in `11b9caf`) was deployed on `Hp-server` through `whatsapp-scheduler.service`. Before installation, the service was stopped and the complete 38 MB `DATA_DIR` (`/home/navjot/.whatsapp-scheduler-bot`) was archived to `/home/navjot/watchpoint-backups/2026-08-20-pre-api-first.tar.gz`; the resulting 19 MB archive was listed successfully and contains account configuration and `.wwebjs_auth` session data. `git pull --ff-only` confirmed the checkout was current, `npm ci` completed, and `npm run check` passed.
+
+Both `whatsapp-scheduler.service` and `tailscale-admin-funnel.service` were restarted. External `GET https://hp-server.tailed5092.ts.net:10000/api/health` returned `200` with engine `1.1.0`; `/api/accounts` returned the main account; and unauthenticated patrol-state/location probes returned the expected `401 requiresLogin` rather than `404`, confirming the new routes are live. Restarting the API invalidated in-memory Admin tokens, so iOS users must enter the account password again.
+
+At the end of deployment, API/Funnel health was good but `/api/health` still reported `connectedAccounts: 0`. One controlled Scheduler retry did not restore WhatsApp readiness. The production log shows WhatsApp browser startup failures began before this deployment, and direct access to `web.whatsapp.com` succeeds, so this is tracked as a pre-existing saved-session/browser recovery issue rather than an API rollout failure. Do not delete `.wwebjs_auth`; use the iOS Account screen to inspect status and re-link WhatsApp only if the saved session does not recover. `npm ci` also reported eight high-severity transitive dependency findings; no automatic audit fix was applied because forced dependency changes could be breaking and require a separate reviewed upgrade.
+
 ## Planned iOS Additions
 
 WatchPoint's shared-device, multi-guard model (see Architecture) raises two gaps not yet addressed:
