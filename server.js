@@ -249,11 +249,12 @@ async function deleteAccount(accountId) {
     return { ok: false, statusCode: 404, error: `Unknown account "${accountId}".` };
   }
 
-  if (account.id === 'main') {
+  const existingAccounts = readAccounts();
+  if (existingAccounts.length <= 1) {
     return {
       ok: false,
       statusCode: 400,
-      error: 'The main account cannot be removed. Log it out instead, or remove added accounts.',
+      error: 'The final account cannot be removed. Add another guard account first.',
     };
   }
 
@@ -275,16 +276,39 @@ async function deleteAccount(accountId) {
     runtimes.delete(account.id);
   }
 
-  const accounts = readAccounts().filter((candidate) => candidate.id !== account.id);
-  writeAccounts(accounts.length ? accounts : [{ id: 'main', name: 'Main' }]);
+  for (const [token, session] of accountSessions.entries()) {
+    if (session.accountId === account.id) accountSessions.delete(token);
+  }
+
+  const accounts = existingAccounts.filter((candidate) => candidate.id !== account.id);
+  writeAccounts(accounts);
 
   const paths = accountPaths(account);
-  if (paths.dataDir !== DATA_DIR && paths.dataDir.startsWith(path.join(DATA_DIR, 'accounts'))) {
-    fs.rmSync(paths.dataDir, { recursive: true, force: true });
-    setTimeout(() => {
+  const cleanupAccountData = () => {
+    if (account.id === 'main') {
+      // Main stores legacy data directly under DATA_DIR. Delete only its
+      // known files/session directory; never recursively remove DATA_DIR,
+      // which also contains accounts.json and every added guard account.
+      [paths.configPath, paths.sendHistoryPath, paths.patrolStatePath].forEach((target) => {
+        if (path.resolve(target) !== DATA_DIR && path.resolve(target) !== ACCOUNTS_PATH) {
+          fs.rmSync(target, { force: true });
+        }
+      });
+      if (path.resolve(paths.authDir) !== DATA_DIR) {
+        fs.rmSync(paths.authDir, { recursive: true, force: true });
+      }
+      return;
+    }
+
+    if (paths.dataDir !== DATA_DIR && paths.dataDir.startsWith(path.join(DATA_DIR, 'accounts'))) {
       fs.rmSync(paths.dataDir, { recursive: true, force: true });
-    }, 2000);
-  }
+    }
+  };
+
+  cleanupAccountData();
+  // Chromium can briefly retain lock files after destroy(). A second pass
+  // finishes cleanup without delaying the API response.
+  setTimeout(cleanupAccountData, 2000);
 
   return { ok: true, account, accounts: readAccounts() };
 }
@@ -518,6 +542,7 @@ function publicPatrolState(runtime, state = loadPatrolState(runtime)) {
 function syncCheckpointsToConfig(runtime, checkpoints) {
   const config = loadConfigFromPath(runtime.paths.configPath);
   config.patrol = {
+    ...config.patrol,
     checkpoints: checkpoints.map((checkpoint) => ({
       id: checkpoint.id,
       name: checkpoint.name,
@@ -766,8 +791,8 @@ function getSendBlockReason(runtime, config, chat, scheduledAt, history, now = n
     const minutesSinceLastSend =
       (now.getTime() - new Date(lastSuccessfulSend.attemptedAt).getTime()) / MS_PER_MINUTE;
 
-    if (minutesSinceLastSend < schedule.minMinutesBetweenSends) {
-      return `Last successful send was less than ${schedule.minMinutesBetweenSends} minutes ago.`;
+    if (minutesSinceLastSend < config.delivery.minMessageIntervalMinutes) {
+      return `Last successful send was less than ${config.delivery.minMessageIntervalMinutes} minutes ago.`;
     }
   }
 
@@ -821,12 +846,18 @@ async function sendPatrolMessage(runtime, scheduledAt) {
 
 // On-demand send used by the GPS/location trigger (patrol mode). Unlike the
 // scheduled path, this ignores the fixed timetable (there is no scheduledAt and
-// no shift window) but keeps the anti-spam guards that matter: min gap between
-// sends and the daily cap. This prevents re-entering a geofence from spamming
-// the group while still letting a real patrol fire a message immediately.
+// no shift window). It shares the account's destination, minimum message
+// interval, and daily cap with automatic sends. Checkpoint re-entry also has
+// its own longer per-checkpoint cooldown.
 async function sendPatrolMessageNow(
   runtime,
-  { source = 'patrol-gps', checkpointName = null, guard = null, message: messageOverride = null, dryRun = false } = {}
+  {
+    source = 'patrol-gps',
+    checkpointName = null,
+    guard = null,
+    message: messageOverride = null,
+    dryRun = false,
+  } = {}
 ) {
   const config = loadConfigFromPath(runtime.paths.configPath);
 
@@ -859,10 +890,10 @@ async function sendPatrolMessageNow(
     const minutesSinceLastSend =
       (now.getTime() - new Date(lastSuccessfulSend.attemptedAt).getTime()) / MS_PER_MINUTE;
 
-    if (minutesSinceLastSend < config.schedule.minMinutesBetweenSends) {
+    if (minutesSinceLastSend < config.delivery.minMessageIntervalMinutes) {
       return {
         ok: false,
-        reason: `Last send was ${Math.round(minutesSinceLastSend)} min ago (minimum ${config.schedule.minMinutesBetweenSends} min).`,
+        reason: `Last send was ${Math.round(minutesSinceLastSend)} min ago (minimum ${config.delivery.minMessageIntervalMinutes} min).`,
       };
     }
   }
@@ -1237,7 +1268,7 @@ function sanitizeMessageLine(value) {
 }
 
 function buildTriggeredPatrolMessage(config, payload) {
-  const baseMessage = sanitizeMessageLine(payload.message || config.message);
+  const baseMessage = sanitizeMessageLine(payload.message ?? config.patrol?.message ?? config.message);
   const checkpointName = sanitizeMessageLine(payload.checkpointName);
   const guard = sanitizeMessageLine(payload.guard);
 
@@ -1688,6 +1719,21 @@ const server = http.createServer(async (request, response) => {
 
       const body = await readRequestBody(request);
       const payload = JSON.parse(body);
+      // Older clients do not know about the newer shared delivery settings or
+      // patrol.message. Preserve them instead of resetting on unrelated saves.
+      const existingConfig = loadConfigFromPath(runtime.paths.configPath);
+      if (payload.config?.patrol?.message == null) {
+        payload.config = {
+          ...payload.config,
+          patrol: {
+            ...(payload.config?.patrol || {}),
+            message: existingConfig.patrol.message,
+          },
+        };
+      }
+      if (payload.config?.delivery == null) {
+        payload.config.delivery = existingConfig.delivery;
+      }
       const config = saveConfigToPath(runtime.paths.configPath, payload.config);
       const patrolState = loadPatrolState(runtime);
       patrolState.checkpoints = (config.patrol?.checkpoints || [])

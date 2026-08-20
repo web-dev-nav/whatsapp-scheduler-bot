@@ -280,6 +280,7 @@ async function saveCheckpoints() {
   const nextConfig = {
     ...loadedConfig,
     patrol: {
+      ...loadedConfig.patrol,
       checkpoints: checkpoints.map((checkpoint, index) => ({
         id: checkpoint.id || `cp-${index + 1}`,
         name: checkpoint.name || `Checkpoint ${index + 1}`,

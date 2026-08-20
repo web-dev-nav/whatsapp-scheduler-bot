@@ -394,9 +394,9 @@ function renderAccountList() {
     removeButton.className = 'account-row-remove';
     removeButton.type = 'button';
     removeButton.dataset.accountId = account.id;
-    removeButton.textContent = account.id === 'main' ? 'Main account' : 'Remove';
+    removeButton.textContent = 'Remove';
     removeButton.setAttribute('aria-label', `Remove ${account.name}`);
-    removeButton.disabled = account.id === 'main';
+    removeButton.disabled = accounts.length <= 1;
 
     row.append(selectButton, removeButton);
     accountList.append(row);
@@ -460,8 +460,8 @@ async function addAccount(name, password) {
 async function deleteAccountById(accountId) {
   const account = accountById(accountId);
   const accountNameToDelete = account?.name || accountId;
-  if (accountId === 'main') {
-    setSaveStatus('The main account cannot be removed. Use logout instead.', 'error');
+  if (accounts.length <= 1) {
+    setSaveStatus('The final account cannot be removed. Add another account first.', 'error');
     return;
   }
 
@@ -756,6 +756,10 @@ function readForm() {
     groupName,
     timezone: timezone.value.trim(),
     message: message.value.trim(),
+    delivery: currentConfig?.delivery,
+    // This browser form edits only automatic scheduling. Preserve the separate
+    // checkpoint-arrival message and legacy checkpoint representation.
+    patrol: currentConfig?.patrol,
     schedule: {
       enabled: autoSendEnabled,
       activeShiftDays,

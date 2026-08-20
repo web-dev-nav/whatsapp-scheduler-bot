@@ -3,23 +3,22 @@
 //  WatchPoint
 //
 //  Message + schedule config: a read-only overview with an "Edit Setup"
-//  button that enters a 5-step wizard (chat -> days -> shift -> message ->
+//  button that enters a 4-step wizard (days -> shift -> message ->
 //  review), matching the browser's step-by-step flow. Pushed from the
-//  Account hub as "Message & Schedule" -- no NavigationStack of its own
+//  Account hub as "Automatic Message & Schedule" -- no NavigationStack of its own
 //  since it's a pushed destination, not a tab root.
 //
 
 import SwiftUI
 
 enum SetupStep: Int, CaseIterable {
-    case chat, days, shift, message, review
+    case days, shift, message, review
 
     var title: String {
         switch self {
-        case .chat: return "Who gets the messages?"
         case .days: return "Which days?"
         case .shift: return "Day or night shift?"
-        case .message: return "What should it say?"
+        case .message: return "What should scheduled messages say?"
         case .review: return "Review & turn on"
         }
     }
@@ -27,15 +26,16 @@ enum SetupStep: Int, CaseIterable {
 
 struct SetupView: View {
     @ObservedObject var appState: AppState
-    @State private var step: SetupStep = .chat
+    @State private var step: SetupStep = .days
     @State private var isEditing = false
+    @State private var draftConfig: PatrolConfig?
     @State private var showSavedConfirmation = false
 
     var body: some View {
         Group {
             if let config = Binding($appState.patrolConfig) {
-                if isEditing {
-                    wizard(config: config)
+                if isEditing, let draft = Binding($draftConfig) {
+                    wizard(config: draft)
                 } else {
                     overview(config: config)
                 }
@@ -49,7 +49,7 @@ struct SetupView: View {
                 )
             }
         }
-        .navigationTitle("Message & Schedule")
+        .navigationTitle("Automatic Message & Schedule")
         .navigationBarTitleDisplayMode(.inline)
         .task {
             if appState.patrolConfig == nil, !appState.adminToken.isEmpty {
@@ -59,7 +59,7 @@ struct SetupView: View {
         .alert("Saved", isPresented: $showSavedConfirmation) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Your message and schedule have been saved.")
+            Text("Your automatic message and schedule have been saved.")
         }
     }
 
@@ -69,10 +69,10 @@ struct SetupView: View {
     private func overview(config: Binding<PatrolConfig>) -> some View {
         Form {
             Section("Current Setup") {
-                LabeledContent("Chat", value: config.wrappedValue.groupName.isEmpty ? "Not set" : config.wrappedValue.groupName)
+                LabeledContent("Shared Destination", value: config.wrappedValue.groupName.isEmpty ? "Not set" : config.wrappedValue.groupName)
                 LabeledContent("Days", value: dayList(config.wrappedValue.schedule.activeShiftDays))
                 LabeledContent("Shift", value: "\(config.wrappedValue.schedule.shiftStartHour):00 – \(config.wrappedValue.schedule.shiftEndHour):00")
-                LabeledContent("Message", value: config.wrappedValue.message.isEmpty ? "Not set" : config.wrappedValue.message)
+                LabeledContent("Scheduled Message", value: config.wrappedValue.message.isEmpty ? "Not set" : config.wrappedValue.message)
                     .lineLimit(3)
             }
 
@@ -85,11 +85,11 @@ struct SetupView: View {
 
             Section {
                 Button {
-                    step = .chat
-                    isEditing = true
+                    openEditor(with: config.wrappedValue)
                 } label: {
                     Label("Edit Setup", systemImage: "pencil")
                         .frame(maxWidth: .infinity)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
@@ -121,19 +121,26 @@ struct SetupView: View {
 
             HStack {
                 Button("Back") {
-                    step = SetupStep(rawValue: step.rawValue - 1) ?? .chat
+                    step = SetupStep(rawValue: step.rawValue - 1) ?? .days
                 }
-                .disabled(step == .chat)
+                .disabled(step == .days)
 
                 Spacer()
 
                 if step == .review {
                     Button {
                         Task {
+                            guard let draftConfig else { return }
+                            let previousConfig = appState.patrolConfig
+                            appState.patrolConfig = draftConfig
                             let saved = await appState.saveConfig()
                             if saved {
                                 showSavedConfirmation = true
-                                isEditing = false
+                                closeEditor()
+                            } else {
+                                // Keep the editor and its draft intact when
+                                // the API rejects or fails the save.
+                                appState.patrolConfig = previousConfig
                             }
                         }
                     } label: {
@@ -157,16 +164,26 @@ struct SetupView: View {
         .keyboardDoneButton()
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { isEditing = false }
+                Button("Cancel") { closeEditor() }
             }
         }
+    }
+
+    private func openEditor(with config: PatrolConfig) {
+        draftConfig = config
+        step = .days
+        isEditing = true
+    }
+
+    private func closeEditor() {
+        isEditing = false
+        draftConfig = nil
+        step = .days
     }
 
     @ViewBuilder
     private func stepContent(config: Binding<PatrolConfig>) -> some View {
         switch step {
-        case .chat:
-            chatStep(config: config)
         case .days:
             daysStep(config: config)
         case .shift:
@@ -175,25 +192,6 @@ struct SetupView: View {
             messageStep(config: config)
         case .review:
             reviewStep(config: config)
-        }
-    }
-
-    private func chatStep(config: Binding<PatrolConfig>) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Pick the WhatsApp group or chat the patrol updates should go to.")
-                .foregroundStyle(.secondary)
-
-            if appState.whatsAppState?.chats.isEmpty ?? true {
-                Text("No chats loaded yet. Connect WhatsApp first.")
-                    .foregroundStyle(.secondary)
-            } else {
-                Picker("WhatsApp group or chat", selection: config.groupName) {
-                    ForEach(appState.whatsAppState?.chats ?? []) { chat in
-                        Text(chat.name).tag(chat.name)
-                    }
-                }
-                .pickerStyle(.wheel)
-            }
         }
     }
 
@@ -259,7 +257,7 @@ struct SetupView: View {
 
     private func messageStep(config: Binding<PatrolConfig>) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("This exact message is sent each time. Keep it natural.")
+            Text("This exact message is sent automatically by the schedule. Checkpoint arrivals use the separate Patrol Arrival Message setting.")
                 .foregroundStyle(.secondary)
             TextEditor(text: config.message)
                 .frame(minHeight: 180)
@@ -276,7 +274,7 @@ struct SetupView: View {
                 LabeledContent("Chat", value: config.wrappedValue.groupName)
                 LabeledContent("Days", value: dayList(config.wrappedValue.schedule.activeShiftDays))
                 LabeledContent("Shift", value: "\(config.wrappedValue.schedule.shiftStartHour):00 – \(config.wrappedValue.schedule.shiftEndHour):00")
-                LabeledContent("Message", value: config.wrappedValue.message)
+                LabeledContent("Scheduled Message", value: config.wrappedValue.message)
                     .lineLimit(3)
             }
             .panel()

@@ -32,11 +32,18 @@ struct PatrolTab: View {
     @State private var hasCenteredOnUser = false
     @State private var lastAddedCheckpointId: String?
     @State private var radiusDrag: RadiusDragState?
+    @State private var isPlacingCheckpoint = false
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    if let message = appState.apiCompatibilityMessage {
+                        apiCompatibilityBanner(message)
+                    }
+                    if appState.guardReconfirmationRequired {
+                        guardReconfirmationPanel
+                    }
                     if !isWhatsAppReady {
                         notReadyBanner
                     }
@@ -50,7 +57,10 @@ struct PatrolTab: View {
             .keyboardDoneButton()
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Patrol")
-            .onAppear { appState.requestLocationAccess() }
+            .onAppear {
+                appState.requestLocationAccess()
+                appState.refreshGuardReconfirmationRequirement()
+            }
             .onDisappear {
                 Task { await appState.saveCheckpoints() }
                 appState.stopWatchingLocationIfIdle()
@@ -75,6 +85,41 @@ struct PatrolTab: View {
 
     private var isWhatsAppReady: Bool {
         appState.whatsAppState?.status == "ready"
+    }
+
+    private func apiCompatibilityBanner(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "server.rack")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Server Update Required")
+                    .font(.subheadline.weight(.semibold))
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Details") { selectedTab = .account }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+        }
+        .panel()
+    }
+
+    private var guardReconfirmationPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Confirm Guard", systemImage: "person.crop.circle.badge.questionmark")
+                .font(.headline)
+            Text("Still \(appState.guardDisplayName) on \(appState.selectedAccountName)?")
+                .font(.subheadline)
+            HStack {
+                Button("Yes") { appState.confirmCurrentGuard() }
+                    .buttonStyle(.borderedProminent)
+                Button("Switch Guard") { selectedTab = .account }
+                    .buttonStyle(.bordered)
+            }
+        }
+        .panel()
     }
 
     /// Surfaces a real gap: without this, a guard could run a whole patrol
@@ -157,7 +202,7 @@ struct PatrolTab: View {
         VStack(alignment: .leading, spacing: 10) {
             Label("Checkpoints", systemImage: "map")
                 .font(.headline)
-            Text("Tap the map to drop a checkpoint. Drag the white handle on a checkpoint's circle to resize it. When you enter a circle during a live patrol, the message from Setup is sent.")
+            Text("Choose Add Anywhere, then tap the map where the checkpoint should be. Drag the white handle on its circle to resize the radius.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -180,19 +225,50 @@ struct PatrolTab: View {
                     MapUserLocationButton()
                     MapCompass()
                 }
-                .onTapGesture { point in
+                // Map consumes its own tap/pan gestures. A simultaneous
+                // SpatialTapGesture makes checkpoint placement reliable at
+                // arbitrary coordinates without disabling map navigation.
+                .simultaneousGesture(SpatialTapGesture().onEnded { value in
+                    guard isPlacingCheckpoint else { return }
+                    let point = value.location
                     if let coordinate = proxy.convert(point, from: .local) {
                         Task {
-                            lastAddedCheckpointId = await appState.addCheckpoint(
+                            let checkpointId = await appState.addCheckpoint(
                                 latitude: coordinate.latitude,
                                 longitude: coordinate.longitude
                             )
+                            if checkpointId != nil {
+                                lastAddedCheckpointId = checkpointId
+                                isPlacingCheckpoint = false
+                            }
                         }
+                    }
+                })
+                .overlay(alignment: .top) {
+                    if isPlacingCheckpoint {
+                        Label("Tap anywhere on the map", systemImage: "mappin.and.ellipse")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(.regularMaterial, in: Capsule())
+                            .padding(10)
+                            .allowsHitTesting(false)
                     }
                 }
             }
             .frame(height: 260)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            Button {
+                isPlacingCheckpoint.toggle()
+            } label: {
+                Label(
+                    isPlacingCheckpoint ? "Cancel Map Placement" : "Add Checkpoint Anywhere",
+                    systemImage: isPlacingCheckpoint ? "xmark" : "mappin.and.ellipse"
+                )
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
 
             Button {
                 Task { lastAddedCheckpointId = await appState.addCheckpoint() }
@@ -249,19 +325,34 @@ struct PatrolTab: View {
                 Text("No checkpoints yet — tap the map above.")
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(Array($appState.checkpoints.enumerated()), id: \.element.id) { index, $checkpoint in
+                // Bind by stable checkpoint identity. Enumerated/indexed
+                // bindings can become invalid in the same render pass when
+                // deletion shrinks the array, causing hangs or crashes.
+                ForEach($appState.checkpoints) { $checkpoint in
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             TextField("Name", text: $checkpoint.name)
                                 .font(.subheadline.weight(.semibold))
                             Spacer()
                             Button(role: .destructive) {
+                                lastAddedCheckpointId = lastAddedCheckpointId == checkpoint.id ? nil : lastAddedCheckpointId
                                 Task { await appState.deleteCheckpoint(checkpoint) }
                             } label: {
-                                Image(systemName: "trash")
+                                if appState.deletingCheckpointIds.contains(checkpoint.id) {
+                                    ProgressView()
+                                } else {
+                                    Image(systemName: "trash")
+                                }
                             }
+                            .disabled(appState.deletingCheckpointIds.contains(checkpoint.id))
                         }
-                        Stepper("Radius \(Int(checkpoint.radiusMeters)) m", value: $checkpoint.radiusMeters, in: 10...1000, step: 10)
+                        Stepper(
+                            "Radius \(Int(checkpoint.radiusMeters)) m",
+                            value: $checkpoint.radiusMeters,
+                            in: 10...1000,
+                            step: 10
+                        )
+                        .disabled(appState.deletingCheckpointIds.contains(checkpoint.id))
                         Button {
                             Task { await appState.manualTrigger(checkpoint) }
                         } label: {
@@ -269,9 +360,10 @@ struct PatrolTab: View {
                                 .font(.caption)
                         }
                         .buttonStyle(.bordered)
+                        .disabled(appState.deletingCheckpointIds.contains(checkpoint.id))
                     }
                     .padding(.vertical, 6)
-                    if index < appState.checkpoints.count - 1 {
+                    if checkpoint.id != appState.checkpoints.last?.id {
                         Divider()
                     }
                 }

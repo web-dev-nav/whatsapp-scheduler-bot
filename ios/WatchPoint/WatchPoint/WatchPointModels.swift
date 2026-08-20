@@ -219,8 +219,15 @@ struct PatrolConfig: Codable, Hashable {
     var groupName: String
     var timezone: String
     var message: String
+    // Optional keeps the iOS client able to read responses from a server that
+    // predates shared delivery settings. The updated server always returns it.
+    var delivery: DeliveryConfig?
     var schedule: ScheduleConfig
     var patrol: PatrolSection
+}
+
+struct DeliveryConfig: Codable, Hashable {
+    var minMessageIntervalMinutes: Int
 }
 
 struct ScheduleConfig: Codable, Hashable {
@@ -242,7 +249,23 @@ struct ScheduleConfig: Codable, Hashable {
 }
 
 struct PatrolSection: Codable, Hashable {
+    var message: String
     var checkpoints: [ServerCheckpoint]
+
+    private enum CodingKeys: String, CodingKey {
+        case message, checkpoints
+    }
+
+    init(message: String = "", checkpoints: [ServerCheckpoint] = []) {
+        self.message = message
+        self.checkpoints = checkpoints
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        message = try container.decodeIfPresent(String.self, forKey: .message) ?? ""
+        checkpoints = try container.decodeIfPresent([ServerCheckpoint].self, forKey: .checkpoints) ?? []
+    }
 }
 
 // Legacy config representation used by public/patrol.html. iOS does not edit

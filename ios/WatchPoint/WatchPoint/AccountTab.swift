@@ -3,7 +3,7 @@
 //  WatchPoint
 //
 //  Hub for everything a guard only touches rarely: which WhatsApp session
-//  is connected, the message/schedule config, and device preferences. Each
+//  is connected, automatic and patrol-message config, and device preferences. Each
 //  row pushes a full screen from this tab's single NavigationStack rather
 //  than being its own top-level tab -- these are config-time flows, not
 //  something used constantly during a shift.
@@ -13,18 +13,25 @@ import SwiftUI
 
 struct AccountTab: View {
     @ObservedObject var appState: AppState
+    @State private var showWhatsAppSession = false
 
     var body: some View {
         NavigationStack {
             List {
                 Section {
-                    NavigationLink {
-                        WhatsAppSessionView(appState: appState)
+                    Button {
+                        showWhatsAppSession = true
                     } label: {
-                        WhatsAppConnectionRow(state: appState.whatsAppState)
+                        VStack(alignment: .leading, spacing: 8) {
+                            WhatsAppConnectionRow(state: appState.whatsAppState)
+                            Text("Manage guard accounts, login, pairing, and logout")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .foregroundStyle(.primary)
                     }
                 } header: {
-                    Text("WhatsApp Session")
+                    Text("WhatsApp & Guards")
                 } footer: {
                     if let account = appState.adminAccounts.first(where: { $0.id == appState.selectedAdminAccountId }) {
                         Text("Currently on \"\(account.name)\" (\(appState.guardName)). Each account is a separate guard: its own WhatsApp login, checkpoints, patrol history, and guard name. Switching accounts switches all of it, and stops any patrol in progress.")
@@ -32,8 +39,14 @@ struct AccountTab: View {
                 }
 
                 Section("Configuration") {
-                    NavigationLink("Message & Schedule") {
+                    NavigationLink("Shared Delivery Settings") {
+                        DeliverySettingsView(appState: appState)
+                    }
+                    NavigationLink("Automatic Message & Schedule") {
                         SetupView(appState: appState)
+                    }
+                    NavigationLink("Patrol Arrival Message") {
+                        PatrolMessageView(appState: appState)
                     }
                     NavigationLink("Host & Connection") {
                         HostStatusView(appState: appState)
@@ -44,7 +57,14 @@ struct AccountTab: View {
                 }
             }
             .navigationTitle("Account")
+            .navigationDestination(isPresented: $showWhatsAppSession) {
+                WhatsAppSessionView(appState: appState)
+            }
+            .onChange(of: appState.requiresAdminLogin) { _, requiresLogin in
+                if requiresLogin { showWhatsAppSession = true }
+            }
             .task {
+                if appState.requiresAdminLogin { showWhatsAppSession = true }
                 await appState.fetchAdminAccounts()
                 if !appState.adminToken.isEmpty {
                     await appState.refreshWhatsAppStatus()
@@ -61,30 +81,50 @@ private struct WhatsAppSessionView: View {
     @State private var adminPassword = ""
     @State private var showAddAccount = false
     @State private var showDeleteConfirm = false
+    @State private var showLogoutConfirm = false
     @State private var showFullscreenQR = false
 
     var body: some View {
         List {
+            currentSessionSection
+            if pairingImage != nil {
+                pairingSection
+            }
             accountsSection
-            guardNameSection
-            selectedSessionSection
+            if !appState.adminToken.isEmpty {
+                guardNameSection
+                sessionActionsSection
+                accountRemovalSection
+            }
         }
-        .navigationTitle("WhatsApp Session")
+        .navigationTitle("WhatsApp & Guards")
         .navigationBarTitleDisplayMode(.inline)
         .keyboardDoneButton()
         .scrollDismissesKeyboard(.interactively)
         .onDisappear { Task { _ = await appState.savePatrolState() } }
         .confirmationDialog(
-            "Remove this account?",
+            "Remove \(appState.selectedAccountName)?",
             isPresented: $showDeleteConfirm,
             titleVisibility: .visible
         ) {
-            Button("Remove", role: .destructive) {
+            Button("Remove Account and Data", role: .destructive) {
                 Task { await appState.deleteSelectedAccount() }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This deletes the saved WhatsApp session and schedule for this account. This can't be undone.")
+            Text("This permanently deletes this guard's WhatsApp session, schedule, checkpoints, and patrol history from the server. This can't be undone.")
+        }
+        .confirmationDialog(
+            "Log out of WhatsApp?",
+            isPresented: $showLogoutConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Log Out WhatsApp", role: .destructive) {
+                Task { await appState.logoutWhatsApp() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This unlinks WhatsApp from \(appState.selectedAccountName). The guard account and its patrol data remain on the server.")
         }
         .sheet(isPresented: $showAddAccount) {
             AddAccountSheet { name, password in
@@ -110,6 +150,89 @@ private struct WhatsAppSessionView: View {
         "\(appState.selectedAdminAccountId)|\(appState.adminToken.isEmpty)"
     }
 
+    private var pairingImage: UIImage? {
+        guard let qrDataUrl = appState.whatsAppState?.qrDataUrl else { return nil }
+        return UIImage(dataURL: qrDataUrl)
+    }
+
+    private var currentSessionSection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 14) {
+                    Image(systemName: sessionIcon)
+                        .font(.title2)
+                        .foregroundStyle(sessionColor)
+                        .frame(width: 42, height: 42)
+                        .background(sessionColor.opacity(0.12), in: Circle())
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(appState.selectedAccountName)
+                            .font(.headline)
+                        Text(sessionStatusTitle)
+                            .font(.subheadline)
+                            .foregroundStyle(sessionColor)
+                    }
+                    Spacer()
+                    if appState.isAdminLoading {
+                        ProgressView()
+                    }
+                }
+
+                if appState.adminToken.isEmpty {
+                    loginFields
+                } else if appState.whatsAppState?.status != "ready", pairingImage == nil {
+                    Text("Waiting for the Scheduler API and WhatsApp. This screen refreshes automatically.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                if let error = appState.whatsAppState?.error, !error.isEmpty {
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+            }
+            .padding(.vertical, 6)
+        } header: {
+            Text("Current Session")
+        } footer: {
+            Text("The Scheduler account stores this guard's WhatsApp connection and patrol data on the server.")
+        }
+    }
+
+    private var sessionStatusTitle: String {
+        guard !appState.adminToken.isEmpty else { return "Password required" }
+        switch appState.whatsAppState?.status {
+        case "ready": return "Connected and ready"
+        case "qr": return "Waiting for QR pairing"
+        case "authenticated": return "WhatsApp authenticated"
+        case "starting": return "Starting WhatsApp"
+        case "logging_out": return "Logging out"
+        case "disconnected": return "WhatsApp disconnected"
+        case "error": return "Connection error"
+        case .some(let value): return value.replacingOccurrences(of: "_", with: " ").capitalized
+        case nil: return "Checking connection"
+        }
+    }
+
+    private var sessionIcon: String {
+        if appState.adminToken.isEmpty { return "lock.fill" }
+        switch appState.whatsAppState?.status {
+        case "ready": return "checkmark.circle.fill"
+        case "qr": return "qrcode"
+        case "error", "disconnected": return "exclamationmark.triangle.fill"
+        default: return "arrow.triangle.2.circlepath"
+        }
+    }
+
+    private var sessionColor: Color {
+        if appState.adminToken.isEmpty { return .orange }
+        switch appState.whatsAppState?.status {
+        case "ready": return .green
+        case "error", "disconnected": return .red
+        default: return .orange
+        }
+    }
+
     private var accountsSection: some View {
         Section {
             ForEach(appState.adminAccounts) { account in
@@ -122,20 +245,29 @@ private struct WhatsAppSessionView: View {
                 Label("Add Guard", systemImage: "plus.circle")
             }
         } header: {
-            Text("Guards")
+            Text("Switch Guard")
         } footer: {
-            Text("Each guard is a separate WhatsApp account with its own login, checkpoints, schedule, and history.")
+            Text("Switching guards stops an active patrol before loading the selected account's data.")
         }
     }
 
     private func accountRow(_ account: SchedulerAccount) -> some View {
         Button {
             guard account.id != appState.selectedAdminAccountId else { return }
+            adminPassword = ""
             Task { await appState.selectAccount(account.id) }
         } label: {
-            HStack {
-                Text(account.name)
-                    .foregroundStyle(.primary)
+            HStack(spacing: 12) {
+                Image(systemName: "person.crop.circle")
+                    .font(.title3)
+                    .foregroundStyle(account.id == appState.selectedAdminAccountId ? Color.accentColor : .secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(account.name)
+                        .foregroundStyle(.primary)
+                    Text(account.id == appState.selectedAdminAccountId ? "Current guard" : "Tap to switch")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
                 if account.id == appState.selectedAdminAccountId {
                     Image(systemName: "checkmark.circle.fill")
@@ -158,34 +290,26 @@ private struct WhatsAppSessionView: View {
         }
     }
 
-    private var selectedSessionSection: some View {
-        Section("Selected Session") {
-            WhatsAppConnectionRow(state: appState.whatsAppState)
-
-            if appState.adminToken.isEmpty {
-                loginFields
-            } else {
-                connectedControls
-            }
-        }
-    }
-
     private var loginFields: some View {
-        Group {
+        VStack(alignment: .leading, spacing: 10) {
             SecureField("Account password", text: $adminPassword)
+                .textContentType(.password)
             Button {
-                Task { await appState.loginAdmin(password: adminPassword) }
+                Task {
+                    await appState.loginAdmin(password: adminPassword)
+                    if !appState.adminToken.isEmpty { adminPassword = "" }
+                }
             } label: {
-                Label("Connect", systemImage: "lock.open")
+                Label("Unlock Guard Account", systemImage: "lock.open")
+                    .frame(maxWidth: .infinity)
             }
+            .buttonStyle(.borderedProminent)
             .disabled(adminPassword.count < 4 || appState.isAdminLoading)
         }
     }
 
-    private var connectedControls: some View {
-        Group {
-            qrCodeView
-
+    private var sessionActionsSection: some View {
+        Section("Connection Actions") {
             Button {
                 Task { await appState.refreshWhatsAppStatus() }
             } label: {
@@ -194,37 +318,36 @@ private struct WhatsAppSessionView: View {
             .disabled(appState.isAdminLoading)
 
             Button(role: .destructive) {
-                Task { await appState.logoutWhatsApp() }
+                showLogoutConfirm = true
             } label: {
-                Label("Log Out This Session", systemImage: "rectangle.portrait.and.arrow.right")
+                Label("Unlink WhatsApp", systemImage: "rectangle.portrait.and.arrow.right")
             }
             .disabled(appState.isAdminLoading)
+        }
+    }
 
+    private var accountRemovalSection: some View {
+        Section {
             Button(role: .destructive) {
                 showDeleteConfirm = true
             } label: {
-                Label("Remove This Account", systemImage: "trash")
+                Label("Remove Guard Account", systemImage: "trash")
             }
-            .disabled(appState.isAdminLoading || appState.selectedAdminAccountId == "main")
-
-            if appState.selectedAdminAccountId == "main" {
-                Text("The \"main\" account can't be removed -- it's the engine's default account and other server behavior falls back to it. Log it out instead if you want to unlink WhatsApp from it.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-
-            if let error = appState.whatsAppState?.error, !error.isEmpty {
-                Text(error)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
+            .disabled(appState.isAdminLoading || appState.adminAccounts.count <= 1)
+        } header: {
+            Text("Account Removal")
+        } footer: {
+            if appState.adminAccounts.count <= 1 {
+                Text("The final account can't be removed. Add another guard account first.")
+            } else {
+                Text("Removing an account permanently deletes its server-side WhatsApp session and patrol data.")
             }
         }
     }
 
-    @ViewBuilder
-    private var qrCodeView: some View {
-        if let qrDataUrl = appState.whatsAppState?.qrDataUrl,
-           let image = UIImage(dataURL: qrDataUrl) {
+    private var pairingSection: some View {
+        Section {
+            if let image = pairingImage {
             VStack(spacing: 12) {
                 Button {
                     showFullscreenQR = true
@@ -238,7 +361,7 @@ private struct WhatsAppSessionView: View {
                 }
                 .buttonStyle(.plain)
 
-                Text("You need a **different** phone to scan this -- the one that will actually host this WhatsApp account. You can't scan a code shown on the same screen you're reading it on.")
+                Text("On the phone with this WhatsApp account, open **Settings → Linked Devices → Link a Device**, then scan this code from another display.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
 
@@ -260,6 +383,11 @@ private struct WhatsAppSessionView: View {
             .sheet(isPresented: $showFullscreenQR) {
                 FullscreenQRView(image: image)
             }
+            }
+        } header: {
+            Text("Pair WhatsApp")
+        } footer: {
+            Text("The QR code refreshes automatically until WhatsApp reports that the session is ready.")
         }
     }
 }
@@ -297,7 +425,7 @@ private struct AddAccountSheet: View {
     @State private var name = ""
     @State private var password = ""
     @State private var isSubmitting = false
-    let onAdd: (String, String) async -> Void
+    let onAdd: (String, String) async -> Bool
 
     var body: some View {
         NavigationStack {
@@ -328,9 +456,9 @@ private struct AddAccountSheet: View {
                     Button("Add") {
                         isSubmitting = true
                         Task {
-                            await onAdd(name.trimmingCharacters(in: .whitespaces), password)
+                            let succeeded = await onAdd(name.trimmingCharacters(in: .whitespaces), password)
                             isSubmitting = false
-                            dismiss()
+                            if succeeded { dismiss() }
                         }
                     }
                     .disabled(isSubmitting || name.trimmingCharacters(in: .whitespaces).isEmpty || password.count < 4)

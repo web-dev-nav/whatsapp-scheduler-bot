@@ -8,15 +8,18 @@
 import Combine
 import CoreLocation
 import Foundation
+import LocalAuthentication
 import SwiftUI
 
 @MainActor
 final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
-    // The API base URL and selected account are the only device-local app
-    // preferences. Guard identity, patrol settings, checkpoints, session
-    // state, dedupe state, and history all live on the Scheduler API.
+    // The API base URL, selected account, app-lock preference, and guard
+    // confirmation timestamps are device-local connection/security state.
+    // Guard identity, patrol settings, checkpoints, session state, dedupe
+    // state, and history all live on the Scheduler API.
     @AppStorage("schedulerAdminBaseURL") var schedulerAdminBaseURL = productionSchedulerAdminURL
     @AppStorage("selectedAdminAccountId") var selectedAdminAccountId = "main"
+    @AppStorage("watchpoint.appLockEnabled") var appLockEnabled = true
     @Published var accuracyThresholdMeters = 50.0
     @Published var checkpointCooldownMinutes = 12.0
     @Published var shiftIsActive = false
@@ -32,9 +35,17 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var locationAuthorization: CLAuthorizationStatus = .notDetermined
     @Published var isAdminLoading = false
     @Published var isRetrying = false
+    @Published var deletingCheckpointIds: Set<String> = []
     @Published var alertMessage: String?
+    @Published var apiCompatibilityMessage: String?
+    @Published var requiresAdminLogin = false
+    @Published var isAppLocked = true
+    @Published var isAuthenticatingApp = false
+    @Published var appLockError: String?
+    @Published var guardReconfirmationRequired = false
 
     private let locationManager = CLLocationManager()
+    private let guardReconfirmationInterval: TimeInterval = 4 * 60 * 60
 
     override init() {
         super.init()
@@ -42,11 +53,87 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         locationManager.desiredAccuracy = kCLLocationAccuracyBest
         locationManager.distanceFilter = 10
         locationAuthorization = locationManager.authorizationStatus
-
+        isAppLocked = appLockEnabled
     }
 
     var adminToken: String {
         KeychainStore.token(accountId: selectedAdminAccountId)
+    }
+
+    var selectedAccountName: String {
+        adminAccounts.first(where: { $0.id == selectedAdminAccountId })?.name
+            ?? whatsAppState?.account?.name
+            ?? selectedAdminAccountId
+    }
+
+    var guardDisplayName: String {
+        let trimmed = guardName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "this guard" : trimmed
+    }
+
+    func setAppLockEnabled(_ enabled: Bool) {
+        appLockEnabled = enabled
+        if !enabled {
+            isAppLocked = false
+            appLockError = nil
+        }
+    }
+
+    func lockApp() {
+        guard appLockEnabled else { return }
+        isAppLocked = true
+        appLockError = nil
+    }
+
+    func unlockApp() async {
+        guard appLockEnabled, isAppLocked, !isAuthenticatingApp else { return }
+
+        isAuthenticatingApp = true
+        appLockError = nil
+        defer { isAuthenticatingApp = false }
+
+        let context = LAContext()
+        context.localizedFallbackTitle = "Use Passcode"
+        var policyError: NSError?
+        guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &policyError) else {
+            appLockError = policyError?.localizedDescription
+                ?? "Face ID or a device passcode must be configured to unlock WatchPoint."
+            return
+        }
+
+        do {
+            if try await context.evaluatePolicy(
+                .deviceOwnerAuthentication,
+                localizedReason: "Unlock guard accounts and patrol data."
+            ) {
+                isAppLocked = false
+            }
+        } catch {
+            appLockError = error.localizedDescription
+        }
+    }
+
+    func refreshGuardReconfirmationRequirement(now: Date = Date()) {
+        guard !adminToken.isEmpty else {
+            guardReconfirmationRequired = false
+            return
+        }
+        guard let lastConfirmed = UserDefaults.standard.object(
+            forKey: guardConfirmationKey(selectedAdminAccountId)
+        ) as? Date else {
+            guardReconfirmationRequired = true
+            return
+        }
+        guardReconfirmationRequired = now.timeIntervalSince(lastConfirmed) >= guardReconfirmationInterval
+    }
+
+    func confirmCurrentGuard(now: Date = Date()) {
+        UserDefaults.standard.set(now, forKey: guardConfirmationKey(selectedAdminAccountId))
+        guardReconfirmationRequired = false
+    }
+
+    private func guardConfirmationKey(_ accountId: String) -> String {
+        "watchpoint.guardLastConfirmed.\(accountId)"
     }
 
     /// Shows an alert for a real failure, but swallows cancellation --
@@ -71,9 +158,24 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         if error is CancellationError { return }
         if let urlError = error as? URLError, urlError.code == .cancelled { return }
         if case let SchedulerAdminError.http(status, _) = error, status == 401 {
-            KeychainStore.clearToken(accountId: selectedAdminAccountId)
+            requireAdminLogin()
+            return
         }
         alertMessage = error.localizedDescription
+    }
+
+    private func requireAdminLogin() {
+        KeychainStore.clearToken(accountId: selectedAdminAccountId)
+        requiresAdminLogin = true
+    }
+
+    private func presentPatrolCompatibilityError(_ error: Error) -> Bool {
+        guard case let SchedulerAdminError.http(status, _) = error,
+              status == 404 || status == 405 else {
+            return false
+        }
+        apiCompatibilityMessage = "This Scheduler API is too old for the iOS patrol features. Update and restart the server, then refresh this app."
+        return true
     }
 
     var nearestCheckpoint: (checkpoint: Checkpoint, distance: CLLocationDistance)? {
@@ -178,6 +280,9 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     func deleteCheckpoint(_ checkpoint: Checkpoint) async {
+        guard deletingCheckpointIds.insert(checkpoint.id).inserted else { return }
+        defer { deletingCheckpointIds.remove(checkpoint.id) }
+
         let previous = checkpoints
         checkpoints.removeAll { $0.id == checkpoint.id }
         if !(await savePatrolState()) {
@@ -252,16 +357,18 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         do {
             let response = try await api.login(password: password)
             KeychainStore.setToken(response.token, accountId: response.account.id)
-            await selectAccount(response.account.id)
+            requiresAdminLogin = false
+            await selectAccount(response.account.id, confirmsGuard: true)
         } catch {
             presentError(error)
         }
     }
 
-    func createAccount(name: String, password: String) async {
+    @discardableResult
+    func createAccount(name: String, password: String) async -> Bool {
         guard let api = adminAPI else {
             alertMessage = "Scheduler admin URL is invalid."
-            return
+            return false
         }
 
         isAdminLoading = true
@@ -271,9 +378,12 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
             let response = try await api.createAccount(name: name, password: password)
             adminAccounts = response.accounts
             KeychainStore.setToken(response.token, accountId: response.account.id)
-            await selectAccount(response.account.id)
+            requiresAdminLogin = false
+            await selectAccount(response.account.id, confirmsGuard: true)
+            return true
         } catch {
             presentError(error)
+            return false
         }
     }
 
@@ -290,7 +400,7 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
             let response = try await api.deleteAccount()
             KeychainStore.clearToken(accountId: selectedAdminAccountId)
             adminAccounts = response.accounts
-            await selectAccount(response.accounts.first?.id ?? "main")
+            await selectAccount(response.accounts.first?.id ?? "main", confirmsGuard: true)
         } catch {
             presentError(error)
         }
@@ -298,18 +408,26 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// Switching accounts stops the old account's server-side patrol before
     /// loading the new account's complete API-backed state.
-    func selectAccount(_ accountId: String) async {
-        if shiftIsActive, !adminToken.isEmpty {
+    func selectAccount(_ accountId: String, confirmsGuard: Bool = true) async {
+        let isSwitchingAccounts = accountId != selectedAdminAccountId
+
+        // App unlock recreates the tab hierarchy and refreshes the already
+        // selected account. Only a real account change should stop patrol;
+        // treating a same-account refresh as a switch stopped every active
+        // patrol whenever the app lock appeared.
+        if isSwitchingAccounts, shiftIsActive, !adminToken.isEmpty {
             guard await stopPatrol() else { return }
         }
         selectedAdminAccountId = accountId
-        whatsAppState = nil
-        patrolConfig = nil
-        logs = []
-        guardName = ""
-        checkpoints = []
-        history = []
-        shiftIsActive = false
+        if isSwitchingAccounts {
+            whatsAppState = nil
+            patrolConfig = nil
+            logs = []
+            guardName = ""
+            checkpoints = []
+            history = []
+            shiftIsActive = false
+        }
 
         guard !adminToken.isEmpty else { return }
         async let status: Void = refreshWhatsAppStatus()
@@ -317,6 +435,11 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         async let recentLogs: Void = fetchLogs()
         async let patrol: Void = fetchPatrolState()
         _ = await (status, config, recentLogs, patrol)
+        if confirmsGuard {
+            confirmCurrentGuard()
+        } else {
+            refreshGuardReconfirmationRequirement()
+        }
     }
 
     func refreshWhatsAppStatus() async {
@@ -381,7 +504,7 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
             // Activity log is a nice-to-have; don't surface an alert for it,
             // but still drop a stale token on 401 -- see presentError.
             if case let SchedulerAdminError.http(status, _) = error, status == 401 {
-                KeychainStore.clearToken(accountId: selectedAdminAccountId)
+                requireAdminLogin()
             }
         }
     }
@@ -391,7 +514,9 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         do {
             let state = try await api.patrolState()
             applyPatrolState(try await migrateLegacyPatrolStateIfNeeded(state, api: api))
+            apiCompatibilityMessage = nil
         } catch {
+            if presentPatrolCompatibilityError(error) { return }
             presentError(error)
         }
     }

@@ -17,7 +17,11 @@ import SwiftUI
 /// reachable, since the goal is distinguishing "network/TLS is broken" from
 /// "the app-level request was rejected."
 private struct ReachabilityResult {
-    let ok: Bool
+    enum Level {
+        case healthy, warning, failed
+    }
+
+    let level: Level
     let detail: String
     let roundTripMs: Int?
     let checkedAt: Date
@@ -96,8 +100,8 @@ struct HostStatusView: View {
     private func resultRow(_ result: ReachabilityResult?) -> some View {
         if let result {
             HStack {
-                Image(systemName: result.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
-                    .foregroundStyle(result.ok ? .green : .red)
+                Image(systemName: resultIcon(result.level))
+                    .foregroundStyle(resultColor(result.level))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(result.detail)
                         .font(.subheadline)
@@ -112,6 +116,22 @@ struct HostStatusView: View {
                 Text("Checking…")
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    private func resultIcon(_ level: ReachabilityResult.Level) -> String {
+        switch level {
+        case .healthy: return "checkmark.circle.fill"
+        case .warning: return "exclamationmark.triangle.fill"
+        case .failed: return "xmark.circle.fill"
+        }
+    }
+
+    private func resultColor(_ level: ReachabilityResult.Level) -> Color {
+        switch level {
+        case .healthy: return .green
+        case .warning: return .orange
+        case .failed: return .red
         }
     }
 
@@ -134,7 +154,7 @@ struct HostStatusView: View {
         let start = Date()
         do {
             guard let baseURL = URL(string: appState.schedulerAdminBaseURL) else {
-                return (ReachabilityResult(ok: false, detail: "Invalid URL", roundTripMs: nil, checkedAt: Date()), nil)
+                return (ReachabilityResult(level: .failed, detail: "Invalid URL", roundTripMs: nil, checkedAt: Date()), nil)
             }
             let api = SchedulerAdminAPI(
                 baseURL: baseURL,
@@ -142,13 +162,53 @@ struct HostStatusView: View {
                 token: ""
             )
             let health = try await api.health()
+            appState.apiCompatibilityMessage = nil
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
             return (
-                ReachabilityResult(ok: health.status == "ok", detail: "API \(health.status)", roundTripMs: elapsedMs, checkedAt: Date()),
+                ReachabilityResult(
+                    level: health.status == "ok" ? .healthy : .failed,
+                    detail: "API \(health.status)",
+                    roundTripMs: elapsedMs,
+                    checkedAt: Date()
+                ),
                 health
             )
         } catch {
-            return (ReachabilityResult(ok: false, detail: error.localizedDescription, roundTripMs: nil, checkedAt: Date()), nil)
+            if case let SchedulerAdminError.http(status, _) = error,
+               status == 404 || status == 405,
+               let baseURL = URL(string: appState.schedulerAdminBaseURL) {
+                let api = SchedulerAdminAPI(
+                    baseURL: baseURL,
+                    accountId: appState.selectedAdminAccountId,
+                    token: ""
+                )
+                do {
+                    _ = try await api.accounts()
+                    let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
+                    appState.apiCompatibilityMessage = "This Scheduler API is reachable but outdated. Deploy and restart the current server before using iOS patrol features."
+                    return (
+                        ReachabilityResult(
+                            level: .warning,
+                            detail: "API reachable — update required",
+                            roundTripMs: elapsedMs,
+                            checkedAt: Date()
+                        ),
+                        nil
+                    )
+                } catch {
+                    // Fall through to the original health-check error when
+                    // even the legacy account-list endpoint is unavailable.
+                }
+            }
+            return (
+                ReachabilityResult(
+                    level: .failed,
+                    detail: error.localizedDescription,
+                    roundTripMs: nil,
+                    checkedAt: Date()
+                ),
+                nil
+            )
         }
     }
 

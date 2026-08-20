@@ -16,6 +16,11 @@ const DEFAULT_CONFIG = {
   timezone: TIMEZONE,
   message:
     'Patrol completed and verified all four checkpoints — East, West, South, and North. Ensured Main Entrances and truck entrance and bowery rd entrance were open as required, and Wright Street entrances were closed and confirmed secure. Conducted a thorough inspection of all areas with no unusual activity detected.',
+  delivery: {
+    // Shared floor for automatic and patrol sends. Zero allows immediate
+    // delivery; checkpoint re-entry still has its own longer cooldown.
+    minMessageIntervalMinutes: 0,
+  },
   schedule: {
     enabled: true,
     activeShiftDays: [1, 2, 3],
@@ -33,10 +38,11 @@ const DEFAULT_CONFIG = {
     reconnectCooldownMinutes: 15,
     staleSendGraceMinutes: 5,
   },
-  // GPS "patrol mode": checkpoints the guard physically drives to. When the
-  // phone enters a checkpoint radius, the same message is sent on demand
-  // (see /api/patrol/trigger in server.js) instead of on a fixed timer.
+  // GPS "patrol mode": checkpoints the guard physically drives to. Its
+  // message is configured independently from automatic scheduled sends.
   patrol: {
+    message:
+      'Patrol completed and verified all four checkpoints — East, West, South, and North. Ensured Main Entrances and truck entrance and bowery rd entrance were open as required, and Wright Street entrances were closed and confirmed secure. Conducted a thorough inspection of all areas with no unusual activity detected.',
     checkpoints: [],
   },
 };
@@ -49,6 +55,10 @@ function mergeConfig(config) {
   return {
     ...deepClone(DEFAULT_CONFIG),
     ...config,
+    delivery: {
+      ...deepClone(DEFAULT_CONFIG.delivery),
+      ...(config.delivery || {}),
+    },
     schedule: {
       ...deepClone(DEFAULT_CONFIG.schedule),
       ...(config.schedule || {}),
@@ -129,6 +139,12 @@ function normalizeConfig(config) {
   const merged = mergeConfig(config);
   const schedule = merged.schedule;
 
+  merged.delivery.minMessageIntervalMinutes = clampNumber(
+    Number(merged.delivery.minMessageIntervalMinutes),
+    0,
+    240
+  );
+
   schedule.activeShiftDays = [...new Set(schedule.activeShiftDays.map(Number))]
     .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
     .sort((a, b) => a - b);
@@ -190,7 +206,12 @@ function normalizeConfig(config) {
   const patrolCheckpoints = Array.isArray(merged.patrol && merged.patrol.checkpoints)
     ? merged.patrol.checkpoints
     : [];
+  // Older configs used the scheduled message for both delivery paths. Copy it
+  // into the new patrol field on normalization so upgrades keep sending the
+  // same text until the guard deliberately edits the separate patrol message.
+  const patrolMessage = config?.patrol?.message == null ? merged.message : config.patrol.message;
   merged.patrol = {
+    message: String(patrolMessage || '').trim(),
     checkpoints: patrolCheckpoints
       .map((checkpoint, index) => normalizeCheckpoint(checkpoint, index))
       .filter(Boolean),

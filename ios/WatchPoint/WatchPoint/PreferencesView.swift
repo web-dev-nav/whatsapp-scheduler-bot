@@ -13,6 +13,19 @@ struct PreferencesView: View {
 
     var body: some View {
         Form {
+            Section("Privacy") {
+                Toggle(
+                    "Require Face ID or Passcode",
+                    isOn: Binding(
+                        get: { appState.appLockEnabled },
+                        set: { appState.setAppLockEnabled($0) }
+                    )
+                )
+                Text("Locks WatchPoint at launch and whenever the app returns from the background.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Scheduler Admin") {
                 TextField("Admin base URL", text: $appState.schedulerAdminBaseURL)
                     .keyboardType(.URL)

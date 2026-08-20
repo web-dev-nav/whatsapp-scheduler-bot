@@ -258,6 +258,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = WatchPoint;
 				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsArbitraryLoads = YES;
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "WatchPoint uses Face ID to protect guard accounts and patrol data.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "WatchPoint uses your location during an active shift to detect checkpoint arrivals.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -293,6 +294,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = WatchPoint;
 				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsArbitraryLoads = YES;
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "WatchPoint uses Face ID to protect guard accounts and patrol data.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "WatchPoint uses your location during an active shift to detect checkpoint arrivals.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;

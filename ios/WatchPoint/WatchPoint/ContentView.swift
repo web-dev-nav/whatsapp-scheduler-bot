@@ -7,7 +7,7 @@
 //  3 top-level tabs, organized by how often a guard actually uses them
 //  rather than by API concern: Patrol (home, everyday field use), Activity
 //  (everyday, but secondary to Patrol), and Account (rare, config-time --
-//  WhatsApp session, message/schedule, preferences, all pushed from one
+//  WhatsApp session, automatic/patrol messages, schedule, and preferences, all pushed from one
 //  hub instead of each being a permanent tab).
 //
 
@@ -18,10 +18,40 @@ enum AppTab: Hashable {
 }
 
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var appState = AppState()
     @State private var selectedTab: AppTab = .patrol
 
     var body: some View {
+        Group {
+            if appState.isAppLocked {
+                AppLockView(appState: appState)
+            } else {
+                unlockedContent
+            }
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            switch newPhase {
+            case .background:
+                appState.lockApp()
+            case .active:
+                appState.refreshGuardReconfirmationRequirement()
+                Task { await appState.unlockApp() }
+            default:
+                break
+            }
+        }
+        .onChange(of: appState.requiresAdminLogin) { _, requiresLogin in
+            if requiresLogin { selectedTab = .account }
+        }
+        .alert("WatchPoint", isPresented: alertIsPresented) {
+            Button("OK", role: .cancel) { appState.alertMessage = nil }
+        } message: {
+            Text(appState.alertMessage ?? "")
+        }
+    }
+
+    private var unlockedContent: some View {
         TabView(selection: $selectedTab) {
             PatrolTab(appState: appState, selectedTab: $selectedTab)
                 .tabItem { Label("Patrol", systemImage: "shield.lefthalf.filled") }
@@ -45,13 +75,8 @@ struct ContentView: View {
         .task {
             if !appState.adminToken.isEmpty {
                 await appState.fetchAdminAccounts()
-                await appState.selectAccount(appState.selectedAdminAccountId)
+                await appState.selectAccount(appState.selectedAdminAccountId, confirmsGuard: false)
             }
-        }
-        .alert("WatchPoint", isPresented: alertIsPresented) {
-            Button("OK", role: .cancel) { appState.alertMessage = nil }
-        } message: {
-            Text(appState.alertMessage ?? "")
         }
     }
 
@@ -60,6 +85,45 @@ struct ContentView: View {
             get: { appState.alertMessage != nil },
             set: { if !$0 { appState.alertMessage = nil } }
         )
+    }
+}
+
+private struct AppLockView: View {
+    @ObservedObject var appState: AppState
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "lock.shield.fill")
+                .font(.system(size: 58))
+                .foregroundStyle(.green)
+            VStack(spacing: 6) {
+                Text("WatchPoint Locked")
+                    .font(.title2.weight(.semibold))
+                Text("Authenticate to view guard accounts and patrol data.")
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            if let error = appState.appLockError {
+                Text(error)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+            }
+            Button {
+                Task { await appState.unlockApp() }
+            } label: {
+                Label("Unlock", systemImage: "faceid")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(appState.isAuthenticatingApp)
+        }
+        .padding(32)
+        .frame(maxWidth: 480)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemGroupedBackground))
+        .task { await appState.unlockApp() }
     }
 }
 
