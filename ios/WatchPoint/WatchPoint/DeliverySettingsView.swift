@@ -2,7 +2,8 @@
 //  DeliverySettingsView.swift
 //  WatchPoint
 //
-//  Account-scoped controls shared by automatic and patrol-arrival messages.
+//  Shared WhatsApp destination for automatic and patrol-arrival messages.
+//  Minimum send interval lives on Account → Message Spacing.
 //
 
 import SwiftUI
@@ -10,7 +11,6 @@ import SwiftUI
 struct DeliverySettingsView: View {
     @ObservedObject var appState: AppState
     @State private var selectedGroup = ""
-    @State private var minimumInterval = 0
     @State private var hasLoadedDraft = false
     @State private var showSavedConfirmation = false
 
@@ -33,14 +33,7 @@ struct DeliverySettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Text("Both automatic messages and checkpoint-arrival messages are sent here.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("Message Interval") {
-                Stepper(intervalLabel, value: $minimumInterval, in: 0...240, step: 5)
-                Text("Minimum interval is the wait after any WhatsApp send before another send is allowed. That spacing is what keeps WhatsApp from treating this as bulk messaging. Zero means no extra wait between different checkpoints. Each checkpoint still has its own re-entry cooldown on the Account page.")
+                Text("Both automatic messages and checkpoint-arrival messages are sent here. Change the wait between sends under Account → Message Spacing.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -52,7 +45,7 @@ struct DeliverySettingsView: View {
                     if appState.isConfigLoading {
                         ProgressView().frame(maxWidth: .infinity)
                     } else {
-                        Label("Save Shared Settings", systemImage: "checkmark.circle")
+                        Label("Save Destination", systemImage: "checkmark.circle")
                             .frame(maxWidth: .infinity)
                     }
                 }
@@ -61,7 +54,7 @@ struct DeliverySettingsView: View {
                 .disabled(appState.isConfigLoading || selectedGroup.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
-        .navigationTitle("Shared Delivery Settings")
+        .navigationTitle("Shared Destination Chat")
         .navigationBarTitleDisplayMode(.inline)
         .keyboardDoneButton()
         .scrollDismissesKeyboard(.interactively)
@@ -77,18 +70,13 @@ struct DeliverySettingsView: View {
         .alert("Saved", isPresented: $showSavedConfirmation) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("The shared WhatsApp destination and message interval have been saved.")
+            Text("The shared WhatsApp destination has been saved.")
         }
-    }
-
-    private var intervalLabel: String {
-        minimumInterval == 0 ? "Minimum interval: No wait" : "Minimum interval: \(minimumInterval) min"
     }
 
     private func loadDraftIfNeeded() {
         guard !hasLoadedDraft, let config = appState.patrolConfig else { return }
         selectedGroup = config.groupName
-        minimumInterval = config.delivery?.minMessageIntervalMinutes ?? 0
         hasLoadedDraft = true
     }
 
@@ -96,7 +84,6 @@ struct DeliverySettingsView: View {
         guard var config = appState.patrolConfig else { return }
         let previousConfig = config
         config.groupName = selectedGroup.trimmingCharacters(in: .whitespacesAndNewlines)
-        config.delivery = DeliveryConfig(minMessageIntervalMinutes: minimumInterval)
         appState.patrolConfig = config
 
         Task {

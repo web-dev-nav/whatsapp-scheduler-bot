@@ -270,6 +270,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = WatchPoint/Info.plist;
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "WatchPoint uses Face ID to protect guard accounts and patrol data.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -298,6 +299,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = WatchPoint/Info.plist;
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "WatchPoint uses Face ID to protect guard accounts and patrol data.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

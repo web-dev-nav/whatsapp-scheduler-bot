@@ -20,7 +20,7 @@ struct PatrolMessageView: View {
                 TextEditor(text: $draftMessage)
                     .frame(minHeight: 180)
 
-                Text("Sent when an active patrol enters a checkpoint radius. WatchPoint adds the checkpoint and guard details below this message.")
+                Text("Sent when an active patrol enters a checkpoint radius. Only this text is sent to WhatsApp; checkpoint and guard names stay in WatchPoint activity.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

@@ -129,49 +129,92 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         appLockError = nil
     }
 
-    func unlockApp() async {
+    func unlockApp(preferPasscode: Bool = false) async {
         guard appLockEnabled, isAppLocked, !isAuthenticatingApp else { return }
 
         isAuthenticatingApp = true
         appLockError = nil
         defer { isAuthenticatingApp = false }
 
-        let context = LAContext()
-        context.localizedFallbackTitle = "Use Passcode"
-        context.localizedCancelTitle = "Cancel"
+        if preferPasscode {
+            await authenticateWithPasscode()
+            return
+        }
 
+        // Face ID is rejected if we prompt before the window is active, or in the
+        // moment after the phone itself was unlocked with Face ID. Reuse the
+        // recent biometric and retry once if iOS says biometry is not ready.
+        try? await Task.sleep(for: .milliseconds(200))
+
+        if await authenticateWithBiometrics() {
+            isAppLocked = false
+            return
+        }
+        if !isAppLocked { return }
+        try? await Task.sleep(for: .milliseconds(500))
+        if await authenticateWithBiometrics() {
+            isAppLocked = false
+        }
+    }
+
+    private func makeBiometricContext() -> LAContext {
+        let context = LAContext()
+        context.localizedCancelTitle = "Cancel"
+        context.localizedFallbackTitle = "Use Passcode"
+        context.touchIDAuthenticationAllowableReuseDuration = 10
+        return context
+    }
+
+    private func authenticateWithBiometrics() async -> Bool {
+        let context = makeBiometricContext()
         var policyError: NSError?
-        let biometricPolicy = LAPolicy.deviceOwnerAuthenticationWithBiometrics
-        if context.canEvaluatePolicy(biometricPolicy, error: &policyError) {
-            do {
-                if try await context.evaluatePolicy(
-                    biometricPolicy,
-                    localizedReason: "Unlock WatchPoint with Face ID."
-                ) {
-                    isAppLocked = false
-                    return
-                }
-            } catch let error as LAError where error.code == .userFallback || error.code == .biometryLockout {
-                // Fall through to a new context for device passcode.
-            } catch let error as LAError where error.code == .userCancel || error.code == .appCancel || error.code == .systemCancel {
-                return
-            } catch {
-                appLockError = error.localizedDescription
-                return
+        let policy = LAPolicy.deviceOwnerAuthenticationWithBiometrics
+        if !context.canEvaluatePolicy(policy, error: &policyError) {
+            // Still try Face ID; canEvaluatePolicy is often false for a moment
+            // after the device unlocks, even when Face ID is enrolled.
+            if context.biometryType == .none {
+                appLockError = policyError?.localizedDescription
+                    ?? "Face ID is not available on this device."
+                return false
             }
         }
 
-        let passcodeContext = LAContext()
+        do {
+            return try await context.evaluatePolicy(
+                policy,
+                localizedReason: "Unlock WatchPoint with Face ID."
+            )
+        } catch let error as LAError {
+            switch error.code {
+            case .userCancel, .appCancel, .systemCancel:
+                return false
+            case .userFallback:
+                await authenticateWithPasscode()
+                return !isAppLocked
+            case .biometryNotAvailable, .biometryNotEnrolled:
+                appLockError = "Face ID is not available. You can unlock with passcode."
+                return false
+            default:
+                appLockError = error.localizedDescription
+                return false
+            }
+        } catch {
+            appLockError = error.localizedDescription
+            return false
+        }
+    }
+
+    private func authenticateWithPasscode() async {
+        let context = LAContext()
         var passcodeError: NSError?
-        guard passcodeContext.canEvaluatePolicy(.deviceOwnerAuthentication, error: &passcodeError) else {
+        guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &passcodeError) else {
             appLockError = passcodeError?.localizedDescription
-                ?? policyError?.localizedDescription
-                ?? "Face ID or a device passcode must be configured to unlock WatchPoint."
+                ?? "A device passcode must be configured to unlock WatchPoint."
             return
         }
 
         do {
-            if try await passcodeContext.evaluatePolicy(
+            if try await context.evaluatePolicy(
                 .deviceOwnerAuthentication,
                 localizedReason: "Unlock guard accounts and patrol data."
             ) {

@@ -47,7 +47,11 @@ struct ContentView: View {
                 appState.lockApp()
             case .active:
                 appState.refreshGuardReconfirmationRequirement()
-                Task { await appState.refreshEngineHealth() }
+                Task {
+                    await appState.refreshEngineHealth()
+                    try? await Task.sleep(for: .milliseconds(250))
+                    await appState.unlockApp()
+                }
             default:
                 break
             }
@@ -114,18 +118,26 @@ private struct AppLockView: View {
             Button {
                 Task { await appState.unlockApp() }
             } label: {
-                Label("Unlock", systemImage: "faceid")
+                Label("Unlock with Face ID", systemImage: "faceid")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
+            .disabled(appState.isAuthenticatingApp)
+
+            Button {
+                Task { await appState.unlockApp(preferPasscode: true) }
+            } label: {
+                Text("Use Passcode")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
             .disabled(appState.isAuthenticatingApp)
         }
         .padding(32)
         .frame(maxWidth: 480)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemGroupedBackground))
-        .task { await appState.unlockApp() }
     }
 }
 

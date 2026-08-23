@@ -851,7 +851,7 @@ async function sendPatrolMessage(runtime, scheduledAt) {
   addSchedulerLog(runtime, 'info', `Sending scheduled message to "${chat.name}".`, { category: 'schedule' });
 
   try {
-    const sentMessage = await chat.sendMessage(config.message);
+    const sentMessage = await chat.sendMessage(stripCheckpointGuardFooter(config.message));
     const messageId = sentMessage?.id?._serialized || sentMessage?.id?.id || null;
     appendSendHistory(runtime, buildHistoryEntry('sent', scheduledAt, config, chat, { messageId }));
     addSchedulerLog(runtime, 'success', `Message sent to "${chat.name}".`, {
@@ -1302,8 +1302,20 @@ function sanitizeMessageLine(value) {
     .trim();
 }
 
+function stripCheckpointGuardFooter(message) {
+  const lines = String(message || '')
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*(Checkpoint|Guard)\s*:/i.test(line));
+  return lines
+    .join('\n')
+    .replace(/\s+Checkpoint\s*:\s*.+?(?=\s+Guard\s*:|$)/i, '')
+    .replace(/\s+Guard\s*:\s*.+$/i, '')
+    .trim();
+}
+
 function buildTriggeredPatrolMessage(config, payload) {
-  return sanitizeMessageLine(payload.message ?? config.patrol?.message ?? config.message);
+  const raw = payload.message ?? config.patrol?.message ?? config.message;
+  return sanitizeMessageLine(stripCheckpointGuardFooter(raw));
 }
 
 function readPatrolTriggerToken(url, request, payload) {
