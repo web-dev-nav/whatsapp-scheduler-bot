@@ -1098,17 +1098,19 @@ async function processPatrolLocation(runtime, payload) {
 }
 
 function scheduleNextPatrolMessage(runtime) {
+  const hadTimer = Boolean(runtime.schedulerTimer);
   clearScheduler(runtime);
 
   if (runtime.state.status !== 'ready') {
-    addSchedulerLog(runtime, 'info', 'Scheduler is waiting for WhatsApp to be ready.', { category: 'schedule' });
     return;
   }
 
   const config = loadConfigFromPath(runtime.paths.configPath);
 
   if (!config.schedule.enabled) {
-    addSchedulerLog(runtime, 'info', 'Automatic scheduled messages are disabled.', { category: 'schedule' });
+    if (hadTimer) {
+      addSchedulerLog(runtime, 'info', 'Automatic scheduled messages are disabled.', { category: 'schedule' });
+    }
     return;
   }
 

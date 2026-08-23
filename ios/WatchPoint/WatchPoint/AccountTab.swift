@@ -70,7 +70,7 @@ struct AccountTab: View {
                 }
 
                 Section {
-                    Stepper(intervalLabel, value: $minMessageInterval, in: 0...240)
+                    Stepper(intervalLabel, value: $minMessageInterval, in: 0...240, step: 5)
                     Stepper(
                         cooldownLabel,
                         value: $appState.checkpointCooldownMinutes,
@@ -161,6 +161,8 @@ struct AccountTab: View {
     private func persistAccountSettings() async {
         _ = await appState.savePatrolState()
         guard hasLoadedInterval, var config = appState.patrolConfig else { return }
+        let currentInterval = config.delivery?.minMessageIntervalMinutes ?? 0
+        guard currentInterval != minMessageInterval else { return }
         config.delivery = DeliveryConfig(minMessageIntervalMinutes: minMessageInterval)
         appState.patrolConfig = config
         _ = await appState.saveConfig()
