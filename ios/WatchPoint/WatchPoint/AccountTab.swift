@@ -72,15 +72,15 @@ struct AccountTab: View {
                 Section {
                     Stepper(intervalLabel, value: $minMessageInterval, in: 0...240)
                     Stepper(
-                        "Same-checkpoint cooldown \(Int(appState.checkpointCooldownMinutes)) min",
+                        cooldownLabel,
                         value: $appState.checkpointCooldownMinutes,
-                        in: 10...15,
-                        step: 1
+                        in: 5...120,
+                        step: 5
                     )
                 } header: {
                     Text("Message Spacing")
                 } footer: {
-                    Text("Minimum interval is the wait after any WhatsApp send (patrol or scheduled) before another send is allowed. That gap is what keeps WhatsApp from treating the account like a bulk-messaging service.\n\nSame-checkpoint cooldown is separate: after a guard is messaged at one checkpoint, that same spot will not send again until this many minutes have passed, even if they walk out and back in.")
+                    Text("Minimum interval is the wait after any WhatsApp send (patrol or scheduled) before another send is allowed. That gap is what keeps WhatsApp from treating the account like a bulk-messaging service.\n\nSame-checkpoint cooldown is separate: after a guard is messaged at one checkpoint, that same spot will not send again until this many minutes have passed. You can set it from 5 minutes up to 2 hours.")
                 }
 
                 Section("Messages") {
@@ -137,6 +137,19 @@ struct AccountTab: View {
         minMessageInterval == 0
             ? "Minimum interval: no extra wait"
             : "Minimum interval: \(minMessageInterval) min between any two sends"
+    }
+
+    private var cooldownLabel: String {
+        let minutes = Int(appState.checkpointCooldownMinutes)
+        if minutes >= 60 {
+            let hours = minutes / 60
+            let remainder = minutes % 60
+            if remainder == 0 {
+                return "Same-checkpoint cooldown \(hours) hr"
+            }
+            return "Same-checkpoint cooldown \(hours) hr \(remainder) min"
+        }
+        return "Same-checkpoint cooldown \(minutes) min"
     }
 
     private func loadIntervalIfNeeded() {

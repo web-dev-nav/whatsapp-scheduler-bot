@@ -138,20 +138,47 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
 
         let context = LAContext()
         context.localizedFallbackTitle = "Use Passcode"
+        context.localizedCancelTitle = "Cancel"
+
         var policyError: NSError?
-        guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &policyError) else {
-            appLockError = policyError?.localizedDescription
+        let biometricPolicy = LAPolicy.deviceOwnerAuthenticationWithBiometrics
+        if context.canEvaluatePolicy(biometricPolicy, error: &policyError) {
+            do {
+                if try await context.evaluatePolicy(
+                    biometricPolicy,
+                    localizedReason: "Unlock WatchPoint with Face ID."
+                ) {
+                    isAppLocked = false
+                    return
+                }
+            } catch let error as LAError where error.code == .userFallback || error.code == .biometryLockout {
+                // Fall through to a new context for device passcode.
+            } catch let error as LAError where error.code == .userCancel || error.code == .appCancel || error.code == .systemCancel {
+                return
+            } catch {
+                appLockError = error.localizedDescription
+                return
+            }
+        }
+
+        let passcodeContext = LAContext()
+        var passcodeError: NSError?
+        guard passcodeContext.canEvaluatePolicy(.deviceOwnerAuthentication, error: &passcodeError) else {
+            appLockError = passcodeError?.localizedDescription
+                ?? policyError?.localizedDescription
                 ?? "Face ID or a device passcode must be configured to unlock WatchPoint."
             return
         }
 
         do {
-            if try await context.evaluatePolicy(
+            if try await passcodeContext.evaluatePolicy(
                 .deviceOwnerAuthentication,
                 localizedReason: "Unlock guard accounts and patrol data."
             ) {
                 isAppLocked = false
             }
+        } catch let error as LAError where error.code == .userCancel || error.code == .appCancel || error.code == .systemCancel {
+            return
         } catch {
             appLockError = error.localizedDescription
         }

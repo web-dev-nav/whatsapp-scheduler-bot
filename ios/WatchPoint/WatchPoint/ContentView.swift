@@ -47,11 +47,7 @@ struct ContentView: View {
                 appState.lockApp()
             case .active:
                 appState.refreshGuardReconfirmationRequirement()
-                Task {
-                    async let unlock: Void = appState.unlockApp()
-                    async let health: Void = appState.refreshEngineHealth()
-                    _ = await (unlock, health)
-                }
+                Task { await appState.refreshEngineHealth() }
             default:
                 break
             }
