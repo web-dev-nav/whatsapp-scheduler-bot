@@ -343,3 +343,15 @@ struct ClearActivityResponse: Decodable {
 let weekdayLabels: [(value: Int, short: String)] = [
     (0, "Sun"), (1, "Mon"), (2, "Tue"), (3, "Wed"), (4, "Thu"), (5, "Fri"), (6, "Sat"),
 ]
+
+struct PatrolStatusResponse: Decodable {
+    let minMessageIntervalMinutes: Int
+    let lastSuccessfulSend: LastSend?
+    let nextAvailableAt: String?
+    let minutesUntilAvailable: Double
+
+    struct LastSend: Decodable {
+        let attemptedAt: String
+        let chatName: String
+    }
+}

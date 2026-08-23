@@ -199,6 +199,14 @@ struct SchedulerAdminAPI {
         )
     }
 
+    func patrolStatus() async throws -> PatrolStatusResponse {
+        try await request(
+            path: "/api/patrol/status",
+            query: ["account": accountId],
+            authorized: true
+        )
+    }
+
     private func request<Response: Decodable, Body: Encodable>(
         path: String,
         method: String = "GET",

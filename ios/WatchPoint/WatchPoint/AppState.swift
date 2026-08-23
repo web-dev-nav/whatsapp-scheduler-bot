@@ -45,6 +45,8 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var isAuthenticatingApp = false
     @Published var appLockError: String?
     @Published var guardReconfirmationRequired = false
+    @Published var patrolStatus: PatrolStatusResponse?
+    @Published var patrolStatusTimer: Timer?
 
     private let locationManager = CLLocationManager()
     private let guardReconfirmationInterval: TimeInterval = 4 * 60 * 60
@@ -604,6 +606,34 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
                 requireAdminLogin()
             }
         }
+    }
+
+    func fetchPatrolStatus() async {
+        guard let api = adminAPI else { return }
+        do {
+            patrolStatus = try await api.patrolStatus()
+        } catch {
+            if case let SchedulerAdminError.http(status, _) = error, status == 401 {
+                requireAdminLogin()
+            }
+        }
+    }
+
+    func startPatrolStatusUpdates() {
+        // Fetch immediately, then update every 5 seconds
+        Task {
+            await fetchPatrolStatus()
+        }
+        patrolStatusTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            Task { [weak self] in
+                await self?.fetchPatrolStatus()
+            }
+        }
+    }
+
+    func stopPatrolStatusUpdates() {
+        patrolStatusTimer?.invalidate()
+        patrolStatusTimer = nil
     }
 
     @discardableResult

@@ -139,6 +139,7 @@ struct PatrolTab: View {
                     if !isWhatsAppReady {
                         notReadyBanner
                     }
+                    patrolTimingPanel
                     statusPanel
                     mapPanel
                     listPanel
@@ -152,10 +153,12 @@ struct PatrolTab: View {
             .onAppear {
                 appState.requestLocationAccess()
                 appState.refreshGuardReconfirmationRequirement()
+                appState.startPatrolStatusUpdates()
             }
             .onDisappear {
                 Task { await appState.saveCheckpoints() }
                 appState.stopWatchingLocationIfIdle()
+                appState.stopPatrolStatusUpdates()
             }
             .onChange(of: appState.currentLocation?.coordinate.latitude) { _, _ in
                 // Recenter once, the first time we get a real GPS fix --
@@ -255,6 +258,103 @@ struct PatrolTab: View {
                 .controlSize(.small)
         }
         .panel()
+    }
+
+    private var patrolTimingPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Patrol Timing", systemImage: "timer")
+                .font(.headline)
+
+            if let status = appState.patrolStatus {
+                VStack(alignment: .leading, spacing: 10) {
+                    if status.minMessageIntervalMinutes > 0 {
+                        HStack {
+                            Text("Interval:")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text("Minimum \(status.minMessageIntervalMinutes) min between patrols")
+                                .font(.subheadline.weight(.semibold))
+                        }
+
+                        HStack {
+                            Text("Next Available:")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            if status.minutesUntilAvailable <= 0 {
+                                Text("✓ Ready now")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.green)
+                            } else {
+                                Text(formatCountdown(status.minutesUntilAvailable))
+                                    .font(.system(.title3, design: .monospaced).weight(.semibold))
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+
+                        if status.minutesUntilAvailable <= 0 {
+                            HStack(spacing: 8) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                Text("Now is the time. You can go for patrol!")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.green)
+                            }
+                            .padding(10)
+                            .frame(maxWidth: .infinity)
+                            .background(.green.opacity(0.15))
+                            .cornerRadius(8)
+                        }
+
+                        if let lastSend = status.lastSuccessfulSend {
+                            Divider()
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Last Patrol")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    Text(lastSend.chatName)
+                                        .font(.subheadline.weight(.semibold))
+                                }
+                                Spacer()
+                                Text(formatLastSendTime(lastSend.attemptedAt))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    } else {
+                        HStack {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                            Text("No time restrictions")
+                                .font(.subheadline)
+                        }
+                    }
+                }
+            } else {
+                Text("Loading...")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .panel()
+    }
+
+    private func formatCountdown(_ minutes: Double) -> String {
+        if minutes < 1 { return "< 1 min" }
+        if minutes < 60 { return "\(Int(ceil(minutes))) min" }
+        let hours = Int(minutes / 60)
+        let mins = Int(minutes.truncatingRemainder(dividingBy: 60))
+        return "\(hours)h \(mins)m"
+    }
+
+    private func formatLastSendTime(_ isoDate: String) -> String {
+        let formatter = ISO8601DateFormatter()
+        guard let date = formatter.date(from: isoDate) else { return isoDate }
+        let timeFormatter = DateFormatter()
+        timeFormatter.timeStyle = .short
+        return timeFormatter.string(from: date)
     }
 
     private var statusPanel: some View {
