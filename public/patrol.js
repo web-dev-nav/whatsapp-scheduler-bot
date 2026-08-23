@@ -624,6 +624,141 @@ function recenter() {
   }
 }
 
+/* ---------- login screen ---------- */
+async function showLoginScreen() {
+  el('patrolLoginScreen').hidden = false;
+  el('patrolContent').hidden = true;
+  await loadAccountsForLogin();
+}
+
+async function hideLoginScreen() {
+  el('patrolLoginScreen').hidden = true;
+  el('patrolContent').hidden = false;
+}
+
+async function loadAccountsForLogin() {
+  const response = await fetch(`/api/accounts?t=${Date.now()}`, { cache: 'no-store' });
+  const data = await response.json();
+  accounts = data.accounts || [];
+
+  const select = el('loginAccountSelect');
+  select.innerHTML = '';
+
+  accounts.forEach((account) => {
+    const option = document.createElement('option');
+    option.value = account.id;
+    option.textContent = account.name;
+    select.appendChild(option);
+  });
+
+  if (accounts.length) {
+    select.value = currentAccountId || accounts[0].id;
+  }
+}
+
+async function handleLoginSubmit() {
+  const accountId = el('loginAccountSelect').value;
+  const password = el('loginPassword').value;
+
+  if (!accountId || !password) {
+    showLoginError('Please select an account and enter password');
+    return;
+  }
+
+  try {
+    currentAccountId = accountId;
+    localStorage.setItem('currentAccountId', accountId);
+
+    const response = await fetch('/api/accounts/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account: accountId, password }),
+    });
+
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || 'Authentication failed');
+
+    setAccountAuthToken(accountId, payload.token);
+    await hideLoginScreen();
+    await initPatrolScreen();
+  } catch (error) {
+    showLoginError(error.message);
+  }
+}
+
+function showLoginError(message) {
+  const errorEl = el('loginError');
+  errorEl.textContent = message;
+  errorEl.classList.add('show');
+  setTimeout(() => errorEl.classList.remove('show'), 5000);
+}
+
+/* ---------- patrol timing/countdown ---------- */
+let patrolStatusInterval = null;
+
+async function updatePatrolTiming() {
+  try {
+    const response = await fetchWithAccountAuth(
+      `/api/patrol/status?${accountQuery()}&t=${Date.now()}`,
+      { cache: 'no-store' }
+    );
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Unable to load patrol status');
+
+    const minInterval = data.minMessageIntervalMinutes || 0;
+    const nextAvailable = data.nextAvailableAt ? new Date(data.nextAvailableAt) : null;
+    const minutesUntil = data.minutesUntilAvailable || 0;
+
+    el('timingStatus').textContent = minInterval > 0
+      ? `Minimum ${minInterval} min between patrols`
+      : 'No time restriction';
+
+    if (minInterval === 0) {
+      el('timingCountdown').textContent = '✓ Ready';
+      el('timingCountdown').style.color = 'var(--accent-dark)';
+      el('timingMessage').classList.remove('show');
+    } else if (minutesUntil <= 0) {
+      el('timingCountdown').textContent = '0 min';
+      el('timingMessage').textContent = '✓ Now is the time. You can go for patrol!';
+      el('timingMessage').classList.add('show');
+      el('timingCountdown').style.color = 'var(--accent-dark)';
+    } else {
+      el('timingCountdown').textContent = formatCountdown(minutesUntil);
+      el('timingCountdown').style.color = 'var(--muted)';
+      el('timingMessage').classList.remove('show');
+    }
+
+    if (data.lastSuccessfulSend) {
+      const lastTime = new Date(data.lastSuccessfulSend.attemptedAt);
+      const formattedTime = lastTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      el('timingStatus').textContent = `Last sent at ${formattedTime} to "${data.lastSuccessfulSend.chatName}"`;
+    }
+  } catch (error) {
+    el('timingStatus').textContent = 'Error loading status';
+    console.error('Patrol status error:', error);
+  }
+}
+
+function formatCountdown(minutes) {
+  if (minutes < 1) return '< 1 min';
+  if (minutes < 60) return Math.ceil(minutes) + ' min';
+  const hours = Math.floor(minutes / 60);
+  const mins = Math.ceil(minutes % 60);
+  return `${hours}h ${mins}m`;
+}
+
+function startTimingUpdates() {
+  updatePatrolTiming();
+  patrolStatusInterval = setInterval(updatePatrolTiming, 5000);
+}
+
+function stopTimingUpdates() {
+  if (patrolStatusInterval) {
+    clearInterval(patrolStatusInterval);
+    patrolStatusInterval = null;
+  }
+}
+
 /* ---------- init ---------- */
 async function switchAccount(accountId) {
   stopPatrol();
@@ -644,9 +779,10 @@ async function switchAccount(accountId) {
   renderMapCheckpoints();
   recenter();
   refreshConnection();
+  startTimingUpdates();
 }
 
-async function init() {
+async function initPatrolScreen() {
   await loadAccounts();
   loadPatrolTokenInput();
   initMap();
@@ -660,6 +796,11 @@ async function init() {
   el('testTrigger').addEventListener('click', testTrigger);
   el('useMyLocation').addEventListener('click', dropAtMyLocation);
   el('recenter').addEventListener('click', recenter);
+  el('logoutButton').addEventListener('click', () => {
+    setAccountAuthToken(currentAccountId, '');
+    stopTimingUpdates();
+    showLoginScreen();
+  });
 
   const unlocked = await ensureAccountAccess(currentAccountId);
   if (!unlocked) {
@@ -670,6 +811,27 @@ async function init() {
   renderCheckpoints();
   refreshConnection();
   setInterval(refreshConnection, 10000);
+  startTimingUpdates();
+}
+
+async function init() {
+  // Load accounts and check if current account is authenticated
+  await loadAccountsForLogin();
+
+  // Check if we already have a valid session
+  const hasToken = accountAuthToken(currentAccountId);
+  if (hasToken) {
+    // Try to use existing token
+    await hideLoginScreen();
+    await initPatrolScreen();
+  } else {
+    // Show login screen
+    el('loginSubmitButton').addEventListener('click', handleLoginSubmit);
+    el('loginPassword').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') handleLoginSubmit();
+    });
+    showLoginScreen();
+  }
 }
 
 init();

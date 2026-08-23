@@ -1797,6 +1797,42 @@ const server = http.createServer(async (request, response) => {
     // a native phone geofence (iOS Shortcuts / Android Tasker), or the n8n bridge
     // used by WatchPoint. Sends the patrol message on demand, guarded against spam
     // (cooldown + daily cap), and templates in checkpoint/guard details when given.
+    if (request.method === 'GET' && pathname === '/api/patrol/status') {
+      const accountId = accountFromUrl(url);
+      if (!requireAccountAuth(request, response, accountId)) return;
+
+      const runtime = requireRuntime(response, accountId);
+      if (!runtime) return;
+
+      const config = loadConfigFromPath(runtime.paths.configPath);
+      const history = readSendHistory(runtime);
+      const lastSuccessfulSend = history ? findLastSuccessfulSend(history) : null;
+      const minIntervalMinutes = config.delivery?.minMessageIntervalMinutes || 0;
+
+      let nextAvailableAt = null;
+      let minutesUntilAvailable = 0;
+
+      if (lastSuccessfulSend && minIntervalMinutes > 0) {
+        const lastSendTime = new Date(lastSuccessfulSend.attemptedAt);
+        const nextAvailableTime = new Date(lastSendTime.getTime() + minIntervalMinutes * MS_PER_MINUTE);
+        const now = new Date();
+
+        nextAvailableAt = nextAvailableTime.toISOString();
+        minutesUntilAvailable = Math.max(0, (nextAvailableTime.getTime() - now.getTime()) / MS_PER_MINUTE);
+      }
+
+      sendJson(response, 200, {
+        minMessageIntervalMinutes: minIntervalMinutes,
+        lastSuccessfulSend: lastSuccessfulSend ? {
+          attemptedAt: lastSuccessfulSend.attemptedAt,
+          chatName: lastSuccessfulSend.chatName,
+        } : null,
+        nextAvailableAt,
+        minutesUntilAvailable: Math.round(minutesUntilAvailable * 100) / 100,
+      });
+      return;
+    }
+
     if (request.method === 'POST' && pathname === '/api/patrol/trigger') {
       const body = await readRequestBody(request);
       const payload = body ? JSON.parse(body) : {};
