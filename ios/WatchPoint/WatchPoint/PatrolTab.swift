@@ -127,6 +127,14 @@ struct PatrolTab: View {
     @State private var showCheckpointPlacement = false
 
     var body: some View {
+        if appState.isPatrolAuthenticated {
+            patrolContent
+        } else {
+            patrolLoginView
+        }
+    }
+
+    private var patrolContent: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
@@ -150,6 +158,12 @@ struct PatrolTab: View {
             .keyboardDoneButton()
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Patrol")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Logout", action: { appState.patrolLogout() })
+                        .font(.subheadline)
+                }
+            }
             .onAppear {
                 appState.requestLocationAccess()
                 appState.refreshGuardReconfirmationRequirement()
@@ -195,6 +209,111 @@ struct PatrolTab: View {
                             )
                         }
                     }
+                }
+            }
+        }
+    }
+
+    @State private var selectedAccountId: String?
+    @State private var patrolPassword: String = ""
+    @State private var isLoggingIn = false
+
+    private var patrolLoginView: some View {
+        VStack(spacing: 20) {
+            VStack(spacing: 12) {
+                Image(systemName: "mappin.circle.fill")
+                    .font(.system(size: 54))
+                    .foregroundStyle(.green)
+                VStack(spacing: 4) {
+                    Text("Guard Patrol")
+                        .font(.title2.weight(.semibold))
+                    Text("Select your account and sign in")
+                        .foregroundStyle(.secondary)
+                        .font(.subheadline)
+                }
+            }
+            .padding(32)
+
+            VStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Your Account")
+                        .font(.headline)
+                    if appState.adminAccounts.isEmpty {
+                        Text("No accounts available")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Picker("Account", selection: $selectedAccountId) {
+                            ForEach(appState.adminAccounts) { account in
+                                Text(account.name).tag(Optional(account.id))
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Password")
+                        .font(.headline)
+                    SecureField("Enter your password", text: $patrolPassword)
+                        .textContentType(.password)
+                        .padding(12)
+                        .background(Color(.systemGray6))
+                        .cornerRadius(8)
+                }
+
+                if let error = appState.patrolLoginError {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                        Text(error)
+                            .font(.subheadline)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.red.opacity(0.1))
+                    .cornerRadius(8)
+                }
+
+                Button {
+                    Task {
+                        guard let accountId = selectedAccountId else { return }
+                        isLoggingIn = true
+                        let success = await appState.authenticatePatrol(accountId: accountId, password: patrolPassword)
+                        isLoggingIn = false
+                        if success {
+                            patrolPassword = ""
+                        }
+                    }
+                } label: {
+                    if isLoggingIn {
+                        ProgressView()
+                            .frame(maxWidth: .infinity)
+                    } else {
+                        Text("Sign in to patrol")
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(selectedAccountId == nil || patrolPassword.isEmpty || isLoggingIn)
+            }
+            .padding(20)
+            .background(Color(.systemGray6))
+            .cornerRadius(12)
+            .padding(20)
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemGroupedBackground))
+        .onAppear {
+            Task {
+                if appState.adminAccounts.isEmpty {
+                    await appState.fetchAdminAccounts()
+                }
+                if selectedAccountId == nil, !appState.adminAccounts.isEmpty {
+                    selectedAccountId = appState.adminAccounts.first?.id
                 }
             }
         }

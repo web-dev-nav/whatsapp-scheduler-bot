@@ -47,6 +47,8 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var guardReconfirmationRequired = false
     @Published var patrolStatus: PatrolStatusResponse?
     @Published var patrolStatusTimer: Timer?
+    @Published var isPatrolAuthenticated = false
+    @Published var patrolLoginError: String?
 
     private let locationManager = CLLocationManager()
     private let guardReconfirmationInterval: TimeInterval = 4 * 60 * 60
@@ -634,6 +636,41 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
     func stopPatrolStatusUpdates() {
         patrolStatusTimer?.invalidate()
         patrolStatusTimer = nil
+    }
+
+    func authenticatePatrol(accountId: String, password: String) async -> Bool {
+        guard let api = adminAPI else { return false }
+        patrolLoginError = nil
+
+        do {
+            let accountApi = SchedulerAdminAPI(
+                baseURL: api.baseURL,
+                accountId: accountId,
+                token: ""
+            )
+            let response = try await accountApi.login(password: password)
+            KeychainStore.setToken(response.token, accountId: accountId)
+            isPatrolAuthenticated = true
+            return true
+        } catch {
+            if let schedulerError = error as? SchedulerAdminError,
+               case .http(let status, let message) = schedulerError {
+                if status == 401 {
+                    patrolLoginError = "Invalid password"
+                } else {
+                    patrolLoginError = message ?? "Authentication failed"
+                }
+            } else {
+                patrolLoginError = error.localizedDescription
+            }
+            return false
+        }
+    }
+
+    func patrolLogout() {
+        isPatrolAuthenticated = false
+        patrolLoginError = nil
+        stopPatrolStatusUpdates()
     }
 
     @discardableResult
