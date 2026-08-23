@@ -57,61 +57,13 @@
       .toast.ok { background: var(--accent-soft); color: var(--accent-dark); }
       .toast.err { background: var(--danger-soft); color: var(--danger); }
       .section-title { font-size: 0.95rem; font-weight: 700; margin: 18px 0 6px; }
-      .timing-panel {
-        margin-top: 14px; padding: 14px; border-radius: var(--radius); border: 1px solid var(--border);
-        background: var(--panel); box-shadow: var(--shadow-sm);
-      }
-      .timing-status { font-size: 0.95rem; font-weight: 600; margin-bottom: 10px; color: var(--accent-dark); }
-      .timing-countdown { font-size: 2rem; font-weight: 700; text-align: center; margin: 12px 0; font-variant-numeric: tabular-nums; }
-      .timing-message { font-size: 1.1rem; text-align: center; font-weight: 600; color: var(--accent-dark); margin-top: 12px; padding: 10px; border-radius: var(--radius-sm); background: var(--accent-soft); display: none; }
-      .timing-message.show { display: block; animation: pulse-message 0.6s ease-in-out; }
-      @keyframes pulse-message { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
-      .login-screen {
-        display: flex; align-items: center; justify-content: center; min-height: 100vh;
-        background: var(--bg); padding: 16px;
-      }
-      .login-panel {
-        width: 100%; max-width: 360px; padding: 32px 24px; border-radius: var(--radius);
-        border: 1px solid var(--border); background: var(--panel); box-shadow: var(--shadow-sm);
-        text-align: center;
-      }
-      .login-panel .brand-mark { font-size: 3rem; margin-bottom: 16px; }
-      .login-panel h1 { font-size: 1.5rem; margin: 16px 0 8px; }
-      .login-panel .login-lead { color: var(--muted); margin-bottom: 24px; }
-      .login-panel .field { text-align: left; margin-bottom: 16px; }
-      .login-panel input[type="password"] { width: 100%; padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: 8px; font-size: 0.95rem; }
-      .login-error { color: var(--danger); font-size: 0.9rem; margin-top: 12px; display: none; }
-      .login-error.show { display: block; }
     </style>
   </head>
   <body>
-    <!-- Login Screen -->
-    <section class="login-screen" id="patrolLoginScreen" hidden>
-      <div class="login-panel">
-        <div class="brand-mark">📍</div>
-        <h1>Guard Patrol</h1>
-        <p class="login-lead">Select your account and sign in to start patrol</p>
-
-        <label class="field">
-          <span>Your account</span>
-          <select id="loginAccountSelect"></select>
-        </label>
-
-        <label class="field">
-          <span>Password</span>
-          <input id="loginPassword" type="password" autocomplete="current-password" placeholder="Enter your password" />
-        </label>
-
-        <button class="btn btn-primary btn-block" id="loginSubmitButton" type="button">Sign in to patrol</button>
-        <p class="login-error" id="loginError" hidden></p>
-      </div>
-    </section>
-
-    <!-- Main Patrol Screen -->
-    <div class="patrol-wrap" id="patrolContent" hidden>
+    <div class="patrol-wrap">
       <div class="patrol-header">
         <h1>📍 Patrol Mode</h1>
-        <button class="back" id="logoutButton" type="button" style="background: none; border: none; color: var(--accent-dark); text-decoration: none; font-weight: 600; font-size: 0.9rem; cursor: pointer;">Logout</button>
+        <a class="back" href="/">← Scheduler</a>
       </div>
 
       <div class="conn-row">
@@ -146,13 +98,6 @@
       <div class="section-title">Checkpoints</div>
       <div class="cp-list" id="cpList"></div>
       <button class="btn btn-primary btn-block" id="saveCheckpoints" type="button">Save checkpoints</button>
-
-      <div class="section-title">Patrol timing</div>
-      <div class="timing-panel" id="timingPanel">
-        <div class="timing-status" id="timingStatus">Loading…</div>
-        <div class="timing-countdown" id="timingCountdown"></div>
-        <div class="timing-message" id="timingMessage"></div>
-      </div>
 
       <div class="section-title">Live patrol</div>
       <div class="live-panel" id="livePanel">
