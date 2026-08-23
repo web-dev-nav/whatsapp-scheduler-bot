@@ -107,6 +107,17 @@ function getAccount(accountId = 'main') {
   return readAccounts().find((account) => account.id === accountId);
 }
 
+function resolveAccountRef(ref) {
+  const value = String(ref || '').trim();
+  if (!value) return null;
+  return (
+    getAccount(value) ||
+    getAccount(slugifyAccountId(value)) ||
+    readAccounts().find((account) => account.name.toLowerCase() === value.toLowerCase()) ||
+    null
+  );
+}
+
 function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
   const passwordHash = crypto.pbkdf2Sync(String(password), salt, 310000, 32, 'sha256').toString('hex');
   return { passwordSalt: salt, passwordHash };
@@ -126,7 +137,14 @@ function createAccountSession(accountId) {
 }
 
 function authTokenFromRequest(request) {
-  return request.headers['x-account-auth'] || '';
+  const header = request.headers['x-account-auth'] || '';
+  if (header) return String(header);
+  try {
+    const parsed = new URL(request.url, `http://${HOST}:${PORT}`);
+    return parsed.searchParams.get('token') || '';
+  } catch {
+    return '';
+  }
 }
 
 function requireAccountAuth(request, response, accountId) {
@@ -1283,25 +1301,7 @@ function sanitizeMessageLine(value) {
 }
 
 function buildTriggeredPatrolMessage(config, payload) {
-  const baseMessage = sanitizeMessageLine(payload.message ?? config.patrol?.message ?? config.message);
-  const checkpointName = sanitizeMessageLine(payload.checkpointName);
-  const guard = sanitizeMessageLine(payload.guard);
-
-  if (!checkpointName && !guard) {
-    return baseMessage;
-  }
-
-  const detailParts = [];
-
-  if (checkpointName) {
-    detailParts.push(`Checkpoint: ${checkpointName}`);
-  }
-
-  if (guard) {
-    detailParts.push(`Guard: ${guard}`);
-  }
-
-  return `${baseMessage}\n\n${detailParts.join('\n')}`;
+  return sanitizeMessageLine(payload.message ?? config.patrol?.message ?? config.message);
 }
 
 function readPatrolTriggerToken(url, request, payload) {
@@ -1345,8 +1345,121 @@ function contentType(filePath) {
   return 'application/octet-stream';
 }
 
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function sendPairPage(url, response) {
+  const accountId = url.searchParams.get('account') || '';
+  const token = url.searchParams.get('token') || '';
+  const account = resolveAccountRef(accountId);
+  const session = accountSessions.get(token);
+  const authorized = Boolean(
+    account &&
+    session &&
+    session.accountId === account.id &&
+    Date.now() - session.createdAt <= SESSION_TOKEN_TTL_MS
+  );
+
+  let status = 'unauthorized';
+  let qrDataUrl = '';
+  let message = 'This pairing link is invalid or expired. Return to WatchPoint and share it again.';
+
+  if (authorized) {
+    const runtime = getRuntime(account.id);
+    status = runtime.state.status || 'starting';
+    qrDataUrl = runtime.state.qrDataUrl || '';
+    if (status === 'ready') {
+      message = 'WhatsApp is linked. You can return to WatchPoint.';
+    } else if (qrDataUrl) {
+      message = 'Scan this code in WhatsApp to finish signup.';
+    } else {
+      message = 'Waiting for WhatsApp to generate a QR code… this page refreshes automatically.';
+    }
+  }
+
+  const qrTag = qrDataUrl
+    ? `<img id="qrCode" alt="WhatsApp login QR code" src="${qrDataUrl}" />`
+    : '<img id="qrCode" alt="WhatsApp login QR code" hidden />';
+
+  const html = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Link WhatsApp · WatchPoint</title>
+    <style>
+      body { margin: 0; min-height: 100vh; background: #eef1f0; color: #17211d; font-family: system-ui, sans-serif; }
+      .panel { max-width: 420px; margin: 40px auto; padding: 28px; background: #fff; border-radius: 14px; }
+      h1 { margin: 0 0 8px; }
+      p, li { color: #6b7671; }
+      img { display: block; width: min(320px, 100%); margin: 16px auto; }
+      img[hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <div class="panel">
+      <h1>Link WhatsApp</h1>
+      <p id="pairStatus">${escapeHtml(message)}</p>
+      ${qrTag}
+      <ol>
+        <li>Open WhatsApp on the phone you want to link</li>
+        <li>Tap Settings → Linked devices</li>
+        <li>Tap Link a device and scan this code</li>
+      </ol>
+    </div>
+    <script>
+      const accountId = ${JSON.stringify(accountId)};
+      const token = ${JSON.stringify(token)};
+      const statusEl = document.getElementById('pairStatus');
+      const qrCode = document.getElementById('qrCode');
+      async function refreshStatus() {
+        if (!accountId || !token) return true;
+        const response = await fetch('/api/whatsapp?account=' + encodeURIComponent(accountId) + '&token=' + encodeURIComponent(token) + '&t=' + Date.now(), { cache: 'no-store' });
+        const payload = await response.json().catch(function () { return {}; });
+        if (!response.ok) {
+          statusEl.textContent = payload.error || 'Unable to load the WhatsApp QR code.';
+          return false;
+        }
+        if (payload.status === 'ready') {
+          qrCode.hidden = true;
+          qrCode.removeAttribute('src');
+          statusEl.textContent = 'WhatsApp is linked. You can return to WatchPoint.';
+          return true;
+        }
+        if (payload.qrDataUrl) {
+          statusEl.textContent = 'Scan this code in WhatsApp to finish signup.';
+          qrCode.src = payload.qrDataUrl;
+          qrCode.hidden = false;
+          return false;
+        }
+        statusEl.textContent = payload.error || 'Waiting for WhatsApp to generate a QR code…';
+        return false;
+      }
+      async function poll() {
+        try { if (await refreshStatus()) return; } catch (error) { statusEl.textContent = error.message; }
+        window.setTimeout(poll, 3000);
+      }
+      ${authorized && status !== 'ready' ? 'poll();' : ''}
+    </script>
+  </body>
+</html>`;
+
+  response.writeHead(200, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Cache-Control': 'no-store',
+  });
+  response.end(html);
+}
+
 function sendStatic(request, response) {
-  const requestedPath = request.url === '/' ? '/index.html' : decodeURIComponent(request.url);
+  const url = new URL(request.url, `http://${HOST}:${PORT}`);
+  let requestedPath = url.pathname === '/' ? '/index.html' : url.pathname;
+  if (requestedPath === '/pair') requestedPath = '/pair.html';
   const filePath = path.normalize(path.join(PUBLIC_DIR, requestedPath));
 
   if (!filePath.startsWith(PUBLIC_DIR)) {
@@ -1357,8 +1470,8 @@ function sendStatic(request, response) {
 
   fs.readFile(filePath, (error, content) => {
     if (error) {
-      response.writeHead(404);
-      response.end('Not found');
+      response.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
+      response.end('<!doctype html><title>Not found</title><p>Not found</p>');
       return;
     }
 
@@ -1432,6 +1545,11 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === 'GET' && pathname === '/api/pair') {
+      sendPairPage(url, response);
+      return;
+    }
+
     if (request.method === 'GET' && pathname === '/api/accounts') {
       sendJson(response, 200, { accounts: publicAccounts() });
       return;
@@ -1449,9 +1567,9 @@ const server = http.createServer(async (request, response) => {
     if (request.method === 'POST' && pathname === '/api/accounts/auth') {
       const body = await readRequestBody(request);
       const payload = JSON.parse(body || '{}');
-      const account = getAccount(payload.account || accountFromUrl(url));
+      const account = resolveAccountRef(payload.account || payload.name || accountFromUrl(url));
       if (!account) {
-        sendJson(response, 404, { error: `Unknown account "${payload.account || accountFromUrl(url)}".` });
+        sendJson(response, 404, { error: `Unknown account "${payload.account || payload.name || accountFromUrl(url)}".` });
         return;
       }
 
@@ -1805,9 +1923,12 @@ const server = http.createServer(async (request, response) => {
       if (!runtime) return;
 
       const config = loadConfigFromPath(runtime.paths.configPath);
+      const patrolState = loadPatrolState(runtime);
       const history = readSendHistory(runtime);
       const lastSuccessfulSend = history ? findLastSuccessfulSend(history) : null;
       const minIntervalMinutes = config.delivery?.minMessageIntervalMinutes || 0;
+      const checkpointCooldownMinutes = patrolState.settings?.checkpointCooldownMinutes
+        ?? DEFAULT_PATROL_SETTINGS.checkpointCooldownMinutes;
 
       let nextAvailableAt = null;
       let minutesUntilAvailable = 0;
@@ -1823,9 +1944,10 @@ const server = http.createServer(async (request, response) => {
 
       sendJson(response, 200, {
         minMessageIntervalMinutes: minIntervalMinutes,
+        checkpointCooldownMinutes,
         lastSuccessfulSend: lastSuccessfulSend ? {
           attemptedAt: lastSuccessfulSend.attemptedAt,
-          chatName: lastSuccessfulSend.chatName,
+          chatName: lastSuccessfulSend.chatName || config.groupName || 'WhatsApp',
         } : null,
         nextAvailableAt,
         minutesUntilAvailable: Math.round(minutesUntilAvailable * 100) / 100,
@@ -1890,6 +2012,11 @@ const server = http.createServer(async (request, response) => {
       const payload = JSON.parse(body);
       const config = normalizeConfig(payload.config);
       sendJson(response, 200, { config, preview: buildPreview(config) });
+      return;
+    }
+
+    if (request.method === 'GET' && (pathname === '/pair' || pathname === '/pair.html')) {
+      sendPairPage(url, response);
       return;
     }
 

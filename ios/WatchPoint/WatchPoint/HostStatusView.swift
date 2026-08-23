@@ -103,7 +103,7 @@ struct HostStatusView: View {
             }
 
         }
-        .navigationTitle("System Status & Versions")
+        .navigationTitle("Test Server Connection")
         .navigationBarTitleDisplayMode(.inline)
         .task { await runChecks() }
     }

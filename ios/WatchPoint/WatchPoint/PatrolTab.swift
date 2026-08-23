@@ -127,11 +127,7 @@ struct PatrolTab: View {
     @State private var showCheckpointPlacement = false
 
     var body: some View {
-        if appState.isPatrolAuthenticated {
-            patrolContent
-        } else {
-            patrolLoginView
-        }
+        patrolContent
     }
 
     private var patrolContent: some View {
@@ -158,16 +154,11 @@ struct PatrolTab: View {
             .keyboardDoneButton()
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Patrol")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Logout", action: { appState.patrolLogout() })
-                        .font(.subheadline)
-                }
-            }
             .onAppear {
                 appState.requestLocationAccess()
                 appState.refreshGuardReconfirmationRequirement()
                 appState.startPatrolStatusUpdates()
+                Task { await appState.fetchConfig() }
             }
             .onDisappear {
                 Task { await appState.saveCheckpoints() }
@@ -214,111 +205,6 @@ struct PatrolTab: View {
         }
     }
 
-    @State private var selectedAccountId: String?
-    @State private var patrolPassword: String = ""
-    @State private var isLoggingIn = false
-
-    private var patrolLoginView: some View {
-        VStack(spacing: 20) {
-            VStack(spacing: 12) {
-                Image(systemName: "mappin.circle.fill")
-                    .font(.system(size: 54))
-                    .foregroundStyle(.green)
-                VStack(spacing: 4) {
-                    Text("Guard Patrol")
-                        .font(.title2.weight(.semibold))
-                    Text("Select your account and sign in")
-                        .foregroundStyle(.secondary)
-                        .font(.subheadline)
-                }
-            }
-            .padding(32)
-
-            VStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Your Account")
-                        .font(.headline)
-                    if appState.adminAccounts.isEmpty {
-                        Text("No accounts available")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Picker("Account", selection: $selectedAccountId) {
-                            ForEach(appState.adminAccounts) { account in
-                                Text(account.name).tag(Optional(account.id))
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                    }
-                }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Password")
-                        .font(.headline)
-                    SecureField("Enter your password", text: $patrolPassword)
-                        .textContentType(.password)
-                        .padding(12)
-                        .background(Color(.systemGray6))
-                        .cornerRadius(8)
-                }
-
-                if let error = appState.patrolLoginError {
-                    HStack(spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
-                        Text(error)
-                            .font(.subheadline)
-                    }
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(.red.opacity(0.1))
-                    .cornerRadius(8)
-                }
-
-                Button {
-                    Task {
-                        guard let accountId = selectedAccountId else { return }
-                        isLoggingIn = true
-                        let success = await appState.authenticatePatrol(accountId: accountId, password: patrolPassword)
-                        isLoggingIn = false
-                        if success {
-                            patrolPassword = ""
-                        }
-                    }
-                } label: {
-                    if isLoggingIn {
-                        ProgressView()
-                            .frame(maxWidth: .infinity)
-                    } else {
-                        Text("Sign in to patrol")
-                            .frame(maxWidth: .infinity)
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .disabled(selectedAccountId == nil || patrolPassword.isEmpty || isLoggingIn)
-            }
-            .padding(20)
-            .background(Color(.systemGray6))
-            .cornerRadius(12)
-            .padding(20)
-
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.systemGroupedBackground))
-        .onAppear {
-            Task {
-                if appState.adminAccounts.isEmpty {
-                    await appState.fetchAdminAccounts()
-                }
-                if selectedAccountId == nil, !appState.adminAccounts.isEmpty {
-                    selectedAccountId = appState.adminAccounts.first?.id
-                }
-            }
-        }
-    }
-
     private var isWhatsAppReady: Bool {
         appState.whatsAppState?.status == "ready"
     }
@@ -351,7 +237,9 @@ struct PatrolTab: View {
             HStack {
                 Button("Yes") { appState.confirmCurrentGuard() }
                     .buttonStyle(.borderedProminent)
-                Button("Switch Guard") { selectedTab = .account }
+                Button("Sign Out") {
+                    Task { await appState.signOut() }
+                }
                     .buttonStyle(.bordered)
             }
         }
@@ -381,83 +269,129 @@ struct PatrolTab: View {
 
     private var patrolTimingPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("Patrol Timing", systemImage: "timer")
+            Label("Message Spacing", systemImage: "timer")
                 .font(.headline)
+            Text("This is the wait after the last WhatsApp send before another message is allowed, so WhatsApp does not treat the account like bulk sending.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
-            if let status = appState.patrolStatus {
-                VStack(alignment: .leading, spacing: 10) {
-                    if status.minMessageIntervalMinutes > 0 {
-                        HStack {
-                            Text("Interval:")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Text("Minimum \(status.minMessageIntervalMinutes) min between patrols")
-                                .font(.subheadline.weight(.semibold))
-                        }
-
-                        HStack {
-                            Text("Next Available:")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            if status.minutesUntilAvailable <= 0 {
-                                Text("✓ Ready now")
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(.green)
-                            } else {
-                                Text(formatCountdown(status.minutesUntilAvailable))
-                                    .font(.system(.title3, design: .monospaced).weight(.semibold))
-                                    .foregroundStyle(.orange)
-                            }
-                        }
-
-                        if status.minutesUntilAvailable <= 0 {
-                            HStack(spacing: 8) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(.green)
-                                Text("Now is the time. You can go for patrol!")
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(.green)
-                            }
-                            .padding(10)
-                            .frame(maxWidth: .infinity)
-                            .background(.green.opacity(0.15))
-                            .cornerRadius(8)
-                        }
-
-                        if let lastSend = status.lastSuccessfulSend {
-                            Divider()
-                            HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Last Patrol")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                    Text(lastSend.chatName)
-                                        .font(.subheadline.weight(.semibold))
-                                }
-                                Spacer()
-                                Text(formatLastSendTime(lastSend.attemptedAt))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    } else {
-                        HStack {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                            Text("No time restrictions")
-                                .font(.subheadline)
-                        }
-                    }
-                }
-            } else {
-                Text("Loading...")
-                    .font(.caption)
+            HStack {
+                Text("Minimum interval")
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
+                Spacer()
+                Text(minIntervalMinutes == 0 ? "No extra wait" : "\(minIntervalMinutes) min between sends")
+                    .font(.subheadline.weight(.semibold))
             }
+
+            HStack {
+                Text("Same-checkpoint cooldown")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(Int(checkpointCooldownMinutes)) min")
+                    .font(.subheadline.weight(.semibold))
+            }
+
+            HStack {
+                Text("Next allowed send")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if minutesUntilNextSend <= 0 {
+                    Text("Ready now")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.green)
+                } else {
+                    Text(formatCountdown(minutesUntilNextSend))
+                        .font(.system(.title3, design: .monospaced).weight(.semibold))
+                        .foregroundStyle(.orange)
+                }
+            }
+
+            if minutesUntilNextSend <= 0 {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                    Text("You can send a patrol message now.")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.green)
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity)
+                .background(.green.opacity(0.15))
+                .cornerRadius(8)
+            }
+
+            if let lastSendLabel, let lastSendAt {
+                Divider()
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Last successful send")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(lastSendLabel)
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    Spacer()
+                    Text(lastSendAt.formatted(date: .omitted, time: .shortened))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Text("Minimum interval covers every outgoing message. Same-checkpoint cooldown only blocks repeating the same checkpoint too soon. Change both under Account → Message Spacing.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
         .panel()
+    }
+
+    private var minIntervalMinutes: Int {
+        appState.patrolStatus?.minMessageIntervalMinutes
+            ?? appState.patrolConfig?.delivery?.minMessageIntervalMinutes
+            ?? 0
+    }
+
+    private var checkpointCooldownMinutes: Double {
+        appState.patrolStatus?.checkpointCooldownMinutes
+            ?? appState.checkpointCooldownMinutes
+    }
+
+    private var lastSendAt: Date? {
+        if let iso = appState.patrolStatus?.lastSuccessfulSend?.attemptedAt,
+           let date = parseISODate(iso) {
+            return date
+        }
+        return appState.history
+            .filter { $0.status == .schedulerSucceeded }
+            .map(\.timestamp)
+            .max()
+    }
+
+    private var lastSendLabel: String? {
+        if let name = appState.patrolStatus?.lastSuccessfulSend?.chatName, !name.isEmpty {
+            return name
+        }
+        return lastSendAt == nil ? nil : "WhatsApp"
+    }
+
+    private var minutesUntilNextSend: Double {
+        if let status = appState.patrolStatus, status.minMessageIntervalMinutes > 0 {
+            return status.minutesUntilAvailable
+        }
+        guard minIntervalMinutes > 0, let lastSendAt else { return 0 }
+        let remaining = (Double(minIntervalMinutes) * 60) - Date().timeIntervalSince(lastSendAt)
+        return max(0, remaining / 60)
+    }
+
+    private func parseISODate(_ value: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: value) { return date }
+        let standard = ISO8601DateFormatter()
+        standard.formatOptions = [.withInternetDateTime]
+        return standard.date(from: value)
     }
 
     private func formatCountdown(_ minutes: Double) -> String {
@@ -466,14 +400,6 @@ struct PatrolTab: View {
         let hours = Int(minutes / 60)
         let mins = Int(minutes.truncatingRemainder(dividingBy: 60))
         return "\(hours)h \(mins)m"
-    }
-
-    private func formatLastSendTime(_ isoDate: String) -> String {
-        let formatter = ISO8601DateFormatter()
-        guard let date = formatter.date(from: isoDate) else { return isoDate }
-        let timeFormatter = DateFormatter()
-        timeFormatter.timeStyle = .short
-        return timeFormatter.string(from: date)
     }
 
     private var statusPanel: some View {

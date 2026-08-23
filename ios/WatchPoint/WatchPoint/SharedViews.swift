@@ -106,6 +106,34 @@ struct WhatsAppConnectionRow: View {
     }
 }
 
+struct FullscreenQRView: View {
+    @Environment(\.dismiss) private var dismiss
+    let image: UIImage
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 20) {
+                Spacer()
+                Image(uiImage: image)
+                    .interpolation(.none)
+                    .resizable()
+                    .scaledToFit()
+                    .padding()
+                Text("Open WhatsApp on a different phone > Settings > Linked Devices > Link a Device, then scan this code.")
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal)
+                Spacer()
+            }
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
 extension UIImage {
     convenience init?(dataURL: String) {
         guard let comma = dataURL.firstIndex(of: ",") else { return nil }

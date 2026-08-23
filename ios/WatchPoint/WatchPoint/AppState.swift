@@ -47,8 +47,10 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var guardReconfirmationRequired = false
     @Published var patrolStatus: PatrolStatusResponse?
     @Published var patrolStatusTimer: Timer?
-    @Published var isPatrolAuthenticated = false
-    @Published var patrolLoginError: String?
+    @Published var patrolStatusLoadFailed = false
+    @Published var isSignedIn = false
+    @Published var showPostSignupPairing = false
+    @Published var skipAppLockOnce = false
 
     private let locationManager = CLLocationManager()
     private let guardReconfirmationInterval: TimeInterval = 4 * 60 * 60
@@ -79,6 +81,23 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         return trimmed.isEmpty ? "this guard" : trimmed
     }
 
+    var pairingPageURL: URL? {
+        let base = schedulerAdminBaseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !adminToken.isEmpty,
+              var components = URLComponents(string: "\(base)/api/pair") else {
+            return nil
+        }
+        components.queryItems = [
+            URLQueryItem(name: "account", value: selectedAdminAccountId),
+            URLQueryItem(name: "token", value: adminToken),
+        ]
+        return components.url
+    }
+
+    var isWhatsAppReady: Bool {
+        whatsAppState?.status == "ready"
+    }
+
     var versionCompatibilityLabel: String {
         guard let health = schedulerHealth else { return "Engine not checked" }
         if !AppRelease.isVersion(health.engineVersion, atLeast: AppRelease.requiredEngineVersion) {
@@ -101,6 +120,11 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     func lockApp() {
         guard appLockEnabled else { return }
+        if skipAppLockOnce {
+            skipAppLockOnce = false
+            return
+        }
+        if isSignedIn, !isWhatsAppReady { return }
         isAppLocked = true
         appLockError = nil
     }
@@ -187,6 +211,7 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
     private func requireAdminLogin() {
         KeychainStore.clearToken(accountId: selectedAdminAccountId)
         requiresAdminLogin = true
+        isSignedIn = false
     }
 
     private func presentPatrolCompatibilityError(_ error: Error) -> Bool {
@@ -446,7 +471,13 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
-    func loginAdmin(password: String) async {
+    func loginAdmin(accountIdentifier: String? = nil, password: String) async {
+        let identifier = (accountIdentifier ?? selectedAdminAccountId)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !identifier.isEmpty else {
+            alertMessage = "Enter your account name."
+            return
+        }
         guard let api = adminAPI else {
             alertMessage = "Scheduler admin URL is invalid."
             return
@@ -456,9 +487,21 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         defer { isAdminLoading = false }
 
         do {
-            let response = try await api.login(password: password)
+            if adminAccounts.isEmpty {
+                adminAccounts = try await api.accounts()
+            }
+            let resolvedId = adminAccounts.first(where: {
+                $0.id.caseInsensitiveCompare(identifier) == .orderedSame
+                    || $0.name.caseInsensitiveCompare(identifier) == .orderedSame
+            })?.id ?? identifier
+            let response = try await SchedulerAdminAPI(
+                baseURL: api.baseURL,
+                accountId: resolvedId,
+                token: ""
+            ).login(account: resolvedId, password: password)
             KeychainStore.setToken(response.token, accountId: response.account.id)
             requiresAdminLogin = false
+            showPostSignupPairing = false
             await selectAccount(response.account.id, confirmsGuard: true)
         } catch {
             presentError(error)
@@ -520,6 +563,7 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
             guard await stopPatrol() else { return }
         }
         selectedAdminAccountId = accountId
+        isSignedIn = !adminToken.isEmpty
         if isSwitchingAccounts {
             whatsAppState = nil
             patrolConfig = nil
@@ -612,9 +656,11 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     func fetchPatrolStatus() async {
         guard let api = adminAPI else { return }
+        patrolStatusLoadFailed = false
         do {
             patrolStatus = try await api.patrolStatus()
         } catch {
+            patrolStatusLoadFailed = true
             if case let SchedulerAdminError.http(status, _) = error, status == 401 {
                 requireAdminLogin()
             }
@@ -638,40 +684,24 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
         patrolStatusTimer = nil
     }
 
-    func authenticatePatrol(accountId: String, password: String) async -> Bool {
-        guard let api = adminAPI else { return false }
-        patrolLoginError = nil
-
-        do {
-            let accountApi = SchedulerAdminAPI(
-                baseURL: api.baseURL,
-                accountId: accountId,
-                token: ""
-            )
-            let response = try await accountApi.login(password: password)
-            KeychainStore.setToken(response.token, accountId: accountId)
-            isPatrolAuthenticated = true
-            return true
-        } catch {
-            if let schedulerError = error as? SchedulerAdminError,
-               case .http(let status, let message) = schedulerError {
-                if status == 401 {
-                    patrolLoginError = "Invalid password"
-                } else {
-                    patrolLoginError = message ?? "Authentication failed"
-                }
-            } else {
-                patrolLoginError = error.localizedDescription
-            }
-            return false
-        }
-    }
-
-    func patrolLogout() {
-        isPatrolAuthenticated = false
-        patrolLoginError = nil
+    func signOut() async {
         stopPatrolStatusUpdates()
+        if shiftIsActive {
+            _ = await stopPatrol()
+        }
+        KeychainStore.clearToken(accountId: selectedAdminAccountId)
+        whatsAppState = nil
+        patrolConfig = nil
+        logs = []
+        guardName = ""
+        checkpoints = []
+        history = []
+        patrolStatus = nil
+        shiftIsActive = false
+        isSignedIn = false
+        showPostSignupPairing = false
     }
+
 
     @discardableResult
     func clearActivityLogs(scope: ActivityClearScope) async -> Bool {

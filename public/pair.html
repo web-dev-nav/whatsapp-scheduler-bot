@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Link WhatsApp · WatchPoint</title>
+    <style>
+      body { margin: 0; min-height: 100vh; background: #eef1f0; color: #17211d; font-family: Inter, system-ui, sans-serif; }
+      .panel { max-width: 420px; margin: 40px auto; padding: 28px; background: #fff; border-radius: 14px; box-shadow: 0 10px 30px rgba(18,34,29,.08); }
+      h1 { margin: 0 0 8px; font-size: 1.6rem; }
+      p, li { color: #6b7671; }
+      img { display: block; width: min(320px, 100%); margin: 16px auto; background: #fff; }
+      img[hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <div class="panel">
+      <h1>Link WhatsApp</h1>
+      <p id="pairStatus">Preparing a QR code…</p>
+      <img id="qrCode" alt="WhatsApp login QR code" hidden />
+      <ol>
+        <li>Open WhatsApp on the phone you want to link</li>
+        <li>Tap Settings → Linked devices</li>
+        <li>Tap Link a device and scan this code</li>
+      </ol>
+    </div>
+    <script>
+      const params = new URLSearchParams(window.location.search);
+      const accountId = params.get("account") || "";
+      const token = params.get("token") || "";
+      const statusEl = document.getElementById("pairStatus");
+      const qrCode = document.getElementById("qrCode");
+
+      async function refreshStatus() {
+        if (!accountId || !token) {
+          statusEl.textContent = "This pairing link is missing account details. Open it again from WatchPoint.";
+          return true;
+        }
+        const response = await fetch("/api/whatsapp?account=" + encodeURIComponent(accountId) + "&t=" + Date.now(), {
+          cache: "no-store",
+          headers: { "X-Account-Auth": token },
+        });
+        const payload = await response.json().catch(function () { return {}; });
+        if (!response.ok) {
+          statusEl.textContent = payload.error || "Unable to load the WhatsApp QR code.";
+          return false;
+        }
+        if (payload.status === "ready") {
+          qrCode.hidden = true;
+          statusEl.textContent = "WhatsApp is linked. You can return to WatchPoint.";
+          return true;
+        }
+        if (payload.status === "qr" && payload.qrDataUrl) {
+          statusEl.textContent = "Scan this code in WhatsApp to finish signup.";
+          qrCode.src = payload.qrDataUrl;
+          qrCode.hidden = false;
+          return false;
+        }
+        qrCode.hidden = true;
+        statusEl.textContent = payload.error || "Waiting for WhatsApp…";
+        return false;
+      }
+
+      async function poll() {
+        try {
+          if (await refreshStatus()) return;
+        } catch (error) {
+          statusEl.textContent = error.message;
+        }
+        window.setTimeout(poll, 3000);
+      }
+      poll();
+    </script>
+  </body>
+</html>

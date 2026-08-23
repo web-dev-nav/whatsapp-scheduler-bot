@@ -93,11 +93,11 @@ struct SchedulerAdminAPI {
         try await request(path: "/api/health")
     }
 
-    func login(password: String) async throws -> AccountAuthResponse {
+    func login(account: String, password: String) async throws -> AccountAuthResponse {
         try await request(
             path: "/api/accounts/auth",
             method: "POST",
-            body: ["account": accountId, "password": password]
+            body: ["account": account, "password": password]
         )
     }
 

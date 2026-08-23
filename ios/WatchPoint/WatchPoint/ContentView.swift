@@ -26,9 +26,20 @@ struct ContentView: View {
         Group {
             if appState.isAppLocked {
                 AppLockView(appState: appState)
+            } else if !appState.isSignedIn {
+                NavigationStack {
+                    LoginView(appState: appState)
+                }
+            } else if !appState.isWhatsAppReady {
+                NavigationStack {
+                    SignupPairingView(appState: appState)
+                }
             } else {
                 unlockedContent
             }
+        }
+        .task {
+            await appState.bootstrap()
         }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
@@ -47,6 +58,9 @@ struct ContentView: View {
         }
         .onChange(of: appState.requiresAdminLogin) { _, requiresLogin in
             if requiresLogin { selectedTab = .account }
+        }
+        .onChange(of: appState.isSignedIn) { _, signedIn in
+            if !signedIn { selectedTab = .patrol }
         }
         .alert("WatchPoint", isPresented: alertIsPresented) {
             Button("OK", role: .cancel) { appState.alertMessage = nil }
@@ -68,16 +82,7 @@ struct ContentView: View {
                 .tag(AppTab.account)
         }
         .onAppear {
-            // Land first-time/logged-out users on Account to connect
-            // WhatsApp first, rather than dropping them on an empty map.
-            // Decided once at launch; the user is free to switch tabs
-            // afterward without being forced back.
-            if appState.adminToken.isEmpty {
-                selectedTab = .account
-            }
-        }
-        .task {
-            await appState.bootstrap()
+            selectedTab = .patrol
         }
     }
 

@@ -40,7 +40,7 @@ struct DeliverySettingsView: View {
 
             Section("Message Interval") {
                 Stepper(intervalLabel, value: $minimumInterval, in: 0...240)
-                Text("This is the minimum wait between any two outgoing messages for this account. Zero allows different checkpoints to send immediately. A checkpoint still keeps its separate re-entry cooldown.")
+                Text("Minimum interval is the wait after any WhatsApp send before another send is allowed. That spacing is what keeps WhatsApp from treating this as bulk messaging. Zero means no extra wait between different checkpoints. Each checkpoint still has its own re-entry cooldown on the Account page.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

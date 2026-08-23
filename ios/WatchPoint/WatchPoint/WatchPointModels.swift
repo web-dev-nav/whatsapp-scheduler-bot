@@ -346,12 +346,13 @@ let weekdayLabels: [(value: Int, short: String)] = [
 
 struct PatrolStatusResponse: Decodable {
     let minMessageIntervalMinutes: Int
+    let checkpointCooldownMinutes: Double?
     let lastSuccessfulSend: LastSend?
     let nextAvailableAt: String?
     let minutesUntilAvailable: Double
 
     struct LastSend: Decodable {
         let attemptedAt: String
-        let chatName: String
+        let chatName: String?
     }
 }
