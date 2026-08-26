@@ -8,7 +8,7 @@
     "start:prod": "NODE_ENV=production node server.js",
     "test:bot": "node bot.js --test",
     "list:schedule": "node bot.js --list",
-    "check": "node --check server.js && node --check scheduler.js && node --check bot.js && node --check public/app.js && node --check public/patrol.js",
+    "check": "node --check server.js && node --check scheduler.js && node --check bot.js && node --check public/app.js",
     "ui": "node server.js"
   },
   "engines": {

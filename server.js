@@ -243,6 +243,30 @@ function requireAccountAuth(request, response, accountId) {
   return false;
 }
 
+function isMasterAdmin(request, url) {
+  const token = (
+    request.headers['x-admin-token'] ||
+    request.headers['x-patrol-token'] ||
+    (url ? url.searchParams.get('adminToken') || url.searchParams.get('token') : '') ||
+    ''
+  ).trim();
+
+  const validTokens = [PATROL_TOKEN, PATROL_TRIGGER_TOKEN].filter(Boolean);
+  if (validTokens.length === 0) return true;
+  return validTokens.includes(token);
+}
+
+function requireMasterAdmin(request, response, url) {
+  if (!isMasterAdmin(request, url)) {
+    sendJson(response, 401, {
+      error: 'Master admin token is invalid or missing.',
+      requiresAdminAuth: true,
+    });
+    return false;
+  }
+  return true;
+}
+
 function clientIp(request) {
   const forwarded = request.headers['x-forwarded-for'];
   if (forwarded) return String(forwarded).split(',')[0].trim();
@@ -1565,7 +1589,10 @@ function sendPairPage(url, response) {
 
 function sendStatic(request, response) {
   const url = new URL(request.url, `http://${HOST}:${PORT}`);
-  let requestedPath = url.pathname === '/' ? '/index.html' : url.pathname;
+  let requestedPath =
+    url.pathname === '/' || url.pathname === '/admin' || url.pathname === '/admin.html'
+      ? '/index.html'
+      : url.pathname;
   if (requestedPath === '/pair') requestedPath = '/pair.html';
   const filePath = path.normalize(path.join(PUBLIC_DIR, requestedPath));
 
@@ -1656,6 +1683,137 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === 'GET' && pathname === '/api/health') {
       sendJson(response, 200, buildHealthResponse());
+      return;
+    }
+
+    if (request.method === 'POST' && pathname === '/api/admin/auth') {
+      if (!requireMasterAdmin(request, response, url)) return;
+      sendJson(response, 200, { ok: true, message: 'Master admin authenticated.' });
+      return;
+    }
+
+    if (request.method === 'GET' && pathname === '/api/admin/overview') {
+      if (!requireMasterAdmin(request, response, url)) return;
+      const accounts = readAccounts();
+      const overview = accounts.map((account) => {
+        const runtime = getRuntime(account.id);
+        return {
+          account: publicAccount(account),
+          status: runtime ? runtime.state.status : 'stopped',
+          qrDataUrl: runtime ? runtime.state.qrDataUrl : null,
+          error: runtime ? runtime.state.error : null,
+          chats: runtime ? runtime.state.chats : [],
+          config: runtime ? loadConfigFromPath(runtime.paths.configPath) : null,
+          patrolState: runtime ? readPatrolState(runtime) : null,
+          logs: runtime ? (runtime.logs || []).slice(-30).reverse() : [],
+        };
+      });
+      sendJson(response, 200, {
+        health: buildHealthResponse(),
+        accounts: overview,
+        primaryAccountId: accounts[0]?.id || null,
+      });
+      return;
+    }
+
+    if (request.method === 'POST' && pathname === '/api/admin/reset-pin') {
+      if (!requireMasterAdmin(request, response, url)) return;
+      const body = await readRequestBody(request);
+      const payload = JSON.parse(body || '{}');
+      const accountId = payload.accountId || payload.account;
+      const newPin = String(payload.newPin || payload.password || payload.pin || '').trim();
+
+      if (!accountId) {
+        sendJson(response, 400, { error: 'Account ID is required.' });
+        return;
+      }
+      if (newPin.length < 4) {
+        sendJson(response, 400, { error: 'PIN must be at least 4 digits.' });
+        return;
+      }
+
+      const result = setAccountPassword(accountId, newPin);
+      if (!result.ok) {
+        sendJson(response, result.statusCode || 400, { error: result.error });
+        return;
+      }
+
+      sendJson(response, 200, {
+        ok: true,
+        account: publicAccount(result.account),
+        message: `Security PIN for "${result.account.name}" has been updated.`,
+      });
+      return;
+    }
+
+    if (request.method === 'POST' && pathname === '/api/admin/whatsapp/reconnect') {
+      if (!requireMasterAdmin(request, response, url)) return;
+      const body = await readRequestBody(request);
+      const payload = JSON.parse(body || '{}');
+      const accountId = payload.accountId || payload.account || accountFromUrl(url);
+      const runtime = getRuntime(accountId);
+      if (!runtime) {
+        sendJson(response, 404, { error: `Unknown account "${accountId}".` });
+        return;
+      }
+      startWhatsappClient(runtime, true);
+      sendJson(response, 200, { ok: true, status: runtime.state.status });
+      return;
+    }
+
+    if (request.method === 'POST' && pathname === '/api/admin/whatsapp/logout') {
+      if (!requireMasterAdmin(request, response, url)) return;
+      const body = await readRequestBody(request);
+      const payload = JSON.parse(body || '{}');
+      const accountId = payload.accountId || payload.account || accountFromUrl(url);
+      const runtime = getRuntime(accountId);
+      if (!runtime) {
+        sendJson(response, 404, { error: `Unknown account "${accountId}".` });
+        return;
+      }
+      if (runtime.client) {
+        try {
+          await runtime.client.logout();
+        } catch (_) {}
+      }
+      runtime.state.status = 'disconnected';
+      runtime.state.qrDataUrl = null;
+      startWhatsappClient(runtime, true);
+      sendJson(response, 200, { ok: true, message: 'WhatsApp session unlinked.' });
+      return;
+    }
+
+    if (request.method === 'PUT' && pathname === '/api/admin/config') {
+      if (!requireMasterAdmin(request, response, url)) return;
+      const body = await readRequestBody(request);
+      const payload = JSON.parse(body || '{}');
+      const accountId = payload.accountId || payload.account || accountFromUrl(url);
+      const runtime = getRuntime(accountId);
+      if (!runtime) {
+        sendJson(response, 404, { error: `Unknown account "${accountId}".` });
+        return;
+      }
+      const nextConfig = normalizeConfig(payload.config || payload);
+      fs.writeFileSync(runtime.paths.configPath, `${JSON.stringify(nextConfig, null, 2)}\n`);
+      scheduleNextPatrolMessage(runtime);
+      sendJson(response, 200, { ok: true, config: nextConfig });
+      return;
+    }
+
+    if (request.method === 'PUT' && pathname === '/api/admin/patrol-state') {
+      if (!requireMasterAdmin(request, response, url)) return;
+      const body = await readRequestBody(request);
+      const payload = JSON.parse(body || '{}');
+      const accountId = payload.accountId || payload.account || accountFromUrl(url);
+      const runtime = getRuntime(accountId);
+      if (!runtime) {
+        sendJson(response, 404, { error: `Unknown account "${accountId}".` });
+        return;
+      }
+      const existing = readPatrolState(runtime);
+      const merged = { ...existing, ...(payload.patrolState || payload) };
+      savePatrolState(runtime, merged);
+      sendJson(response, 200, { ok: true, patrolState: merged });
       return;
     }
 

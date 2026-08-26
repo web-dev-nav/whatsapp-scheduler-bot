@@ -3,275 +3,417 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Patrol Scheduler</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <title>WatchPoint · Master Admin Console</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   </head>
   <body>
-    <main>
-      <!-- ============ CONNECT / LOGIN ============ -->
-      <section class="login-screen" id="loginScreen">
-        <div class="login-panel">
-          <div class="brand-mark">🛡️</div>
-          <h1>Connect WhatsApp</h1>
-          <p class="login-lead" id="loginStatus">Starting WhatsApp…</p>
+    <!-- Top Header -->
+    <header class="app-header">
+      <div class="header-inner">
+        <div class="brand">
+          <div class="brand-badge">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+              <path d="m9 12 2 2 4-4"/>
+            </svg>
+          </div>
+          <div>
+            <div class="brand-title">WatchPoint <span class="brand-tag">ADMIN</span></div>
+            <div class="brand-sub">Patrol & WhatsApp Automation Engine</div>
+          </div>
+        </div>
 
-          <img id="qrCode" class="qr-code" alt="WhatsApp login QR code" hidden />
+        <div class="header-telemetry" id="headerTelemetry">
+          <div class="telem-item">
+            <span class="telem-label">Server Status</span>
+            <span class="telem-val status-pill" id="telemStatus"><span class="dot"></span> Online</span>
+          </div>
+          <div class="telem-item">
+            <span class="telem-label">Uptime</span>
+            <span class="telem-val" id="telemUptime">--</span>
+          </div>
+          <div class="telem-item">
+            <span class="telem-label">Guards</span>
+            <span class="telem-val" id="telemGuards">0</span>
+          </div>
+          <div class="telem-item">
+            <span class="telem-label">WhatsApp</span>
+            <span class="telem-val status-pill" id="telemWhatsapp"><span class="dot"></span> --</span>
+          </div>
+        </div>
 
-          <ol class="scan-steps" id="scanSteps">
-            <li>Open <strong>WhatsApp</strong> on your phone</li>
-            <li>Tap <strong>Settings → Linked devices</strong></li>
-            <li>Tap <strong>Link a device</strong> and scan the code above</li>
-          </ol>
+        <div class="header-actions">
+          <select id="accountSelector" class="account-select" title="Active Guard Account">
+            <option value="">Loading accounts…</option>
+          </select>
+          <button class="btn btn-secondary btn-icon" id="btnRefresh" title="Refresh Dashboard">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg>
+          </button>
+          <button class="btn btn-danger btn-icon" id="btnLockAdmin" title="Lock Admin Console">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          </button>
+        </div>
+      </div>
+    </header>
 
-          <details class="account-switcher">
-            <summary>Connecting a different phone?</summary>
-            <div class="account-switcher-body">
-              <label class="field">
-                <span>Which account?</span>
-                <select id="loginAccountSelect"></select>
-              </label>
-              <form class="inline-add" id="loginAccountForm">
-                <input id="loginAccountName" type="text" autocomplete="off" placeholder="New account name" />
-                <input id="loginAccountPassword" type="password" autocomplete="new-password" placeholder="Password" minlength="4" />
-                <button class="btn btn-ghost" type="submit">Add</button>
-              </form>
-            </div>
-          </details>
+    <!-- Navigation Tabs -->
+    <nav class="nav-tabs-wrapper">
+      <div class="nav-tabs">
+        <button class="nav-tab active" data-tab="guards">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          Guards & Accounts
+        </button>
+        <button class="nav-tab" data-tab="whatsapp">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+          WhatsApp Session
+        </button>
+        <button class="nav-tab" data-tab="schedules">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          Shift Schedules
+        </button>
+        <button class="nav-tab" data-tab="patrol">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+          Checkpoints & Patrol
+        </button>
+        <button class="nav-tab" data-tab="logs">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+          Activity Logs
+        </button>
+      </div>
+    </nav>
+
+    <!-- Main Content Container -->
+    <main class="app-main">
+      <!-- TAB 1: GUARDS & ACCOUNTS -->
+      <section class="tab-pane active" id="tab-guards">
+        <div class="pane-header">
+          <div>
+            <h2 class="pane-title">Guard Accounts Management</h2>
+            <p class="pane-desc">Manage guard phone numbers, reset forgotten PINs, and add or delete shift profiles.</p>
+          </div>
+          <button class="btn btn-primary" id="btnShowAddGuard">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add Guard
+          </button>
+        </div>
+
+        <div class="card-grid" id="guardsList">
+          <div class="loading-spinner">Loading guards…</div>
         </div>
       </section>
 
-      <!-- ============ APP ============ -->
-      <section class="app-shell" id="appShell" hidden>
-        <header class="app-header">
-          <div class="brand">
-            <span class="brand-mark small">🛡️</span>
-            <span>Patrol Scheduler</span>
+      <!-- TAB 2: WHATSAPP SESSION -->
+      <section class="tab-pane" id="tab-whatsapp">
+        <div class="pane-header">
+          <div>
+            <h2 class="pane-title">WhatsApp Session & Device Link</h2>
+            <p class="pane-desc">Monitor live WhatsApp Web multi-device connection, scan pairing QR codes, or force reconnect.</p>
           </div>
-          <div class="account-area">
-            <button class="account-chip" id="accountMenuButton" type="button" aria-expanded="false" aria-controls="accountMenu">
-              <span class="dot dot-ok" id="connectionDot"></span>
-              <span class="account-chip-copy">
-                <small>Account</small>
-                <strong id="accountChipName">main</strong>
-              </span>
-              <span class="account-chip-action">Manage</span>
+          <div class="btn-group">
+            <button class="btn btn-secondary" id="btnRestartWhatsApp">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+              Restart / New QR
             </button>
+            <button class="btn btn-danger" id="btnLogoutWhatsApp">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+              Unlink Device
+            </button>
+          </div>
+        </div>
 
-            <div class="account-manager-backdrop" id="accountMenu" hidden>
-              <section class="account-manager" role="dialog" aria-modal="true" aria-labelledby="accountManagerTitle">
-                <div class="account-manager-head">
-                  <div>
-                    <h2 id="accountManagerTitle">WhatsApp accounts</h2>
-                    <p class="menu-status" id="whatsappStatus">Connected</p>
-                  </div>
-                  <button class="dialog-close" id="accountMenuClose" type="button" aria-label="Close account manager">✕</button>
-                </div>
-
-                <div class="account-manager-section">
-                  <div class="section-label">
-                    <strong>Your accounts</strong>
-                    <small>Tap an account to switch</small>
-                  </div>
-                  <div class="account-list" id="accountList" aria-label="Saved accounts"></div>
-                </div>
-
-                <div class="account-manager-section add-account-section">
-                  <div class="section-label">
-                    <strong>Add another account</strong>
-                    <small>Connect a separate WhatsApp phone</small>
-                  </div>
-                  <form class="account-add-form" id="accountForm">
-                    <label class="field">
-                      <span>Account name</span>
-                      <input id="accountName" type="text" autocomplete="off" placeholder="e.g. Night shift phone" required />
-                    </label>
-                    <label class="field">
-                      <span>Password</span>
-                      <input id="accountPassword" type="password" autocomplete="new-password" placeholder="At least 4 characters" minlength="4" required />
-                    </label>
-                    <button class="btn btn-primary" type="submit">＋ Add account</button>
-                  </form>
-                  <p class="account-feedback" id="accountFeedback" aria-live="polite"></p>
-                </div>
-
-                <button class="btn btn-danger-ghost btn-block" id="logoutWhatsapp" type="button">Log out current WhatsApp session</button>
-              </section>
+        <div class="whatsapp-layout">
+          <div class="card whatsapp-qr-card">
+            <div class="card-title">Live Pairing QR Code</div>
+            <div class="qr-container">
+              <div id="qrPlaceholder" class="qr-placeholder">
+                <div class="spinner"></div>
+                <span id="qrStatusText">Checking connection…</span>
+              </div>
+              <img id="qrImage" class="qr-img" alt="WhatsApp QR Code" hidden />
+            </div>
+            <div class="qr-help">
+              <ol>
+                <li>Open <strong>WhatsApp</strong> on your phone</li>
+                <li>Tap <strong>Settings → Linked Devices → Link a Device</strong></li>
+                <li>Point your camera at this QR code immediately</li>
+              </ol>
             </div>
           </div>
-        </header>
 
-        <!-- ---------- DASHBOARD (summary) ---------- -->
-        <section class="dashboard" id="dashboard" hidden>
-          <div class="summary-card" id="summaryCard">
-            <div class="summary-top">
-              <span class="summary-badge" id="summaryBadge">All set</span>
+          <div class="card whatsapp-details-card">
+            <div class="card-title">Session Telemetry</div>
+            <div class="info-list">
+              <div class="info-row">
+                <span class="info-label">Active Account</span>
+                <span class="info-value font-mono" id="waActiveAccount">--</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">Link Status</span>
+                <span class="info-value status-pill" id="waStatusPill"><span class="dot"></span> --</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">Target Chat / Group</span>
+                <span class="info-value font-mono" id="waTargetGroup">--</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">Connected Chats Loaded</span>
+                <span class="info-value" id="waChatsCount">0</span>
+              </div>
             </div>
-            <p class="summary-text" id="summaryText"></p>
 
-            <div class="autosend" id="autosendRow">
+            <div class="card-sub-header">Select Destination WhatsApp Chat</div>
+            <div class="chat-picker-row">
+              <select id="chatPicker" class="input-select">
+                <option value="">-- Pick from connected WhatsApp chats --</option>
+              </select>
+              <button class="btn btn-secondary" id="btnApplyChat">Set Chat</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 3: SHIFT SCHEDULES -->
+      <section class="tab-pane" id="tab-schedules">
+        <div class="pane-header">
+          <div>
+            <h2 class="pane-title">Shift Timetable & Automated Reporting</h2>
+            <p class="pane-desc">Configure automated timed check-ins sent periodically to WhatsApp groups during shift hours.</p>
+          </div>
+          <button class="btn btn-primary" id="btnSaveSchedule">Save Changes</button>
+        </div>
+
+        <div class="form-grid">
+          <div class="card">
+            <div class="card-title">Schedule Engine Control</div>
+            <div class="toggle-row">
+              <div>
+                <div class="toggle-label">Automatic Scheduled Messages</div>
+                <div class="toggle-desc">Enable background timer to send shift updates automatically.</div>
+              </div>
               <label class="switch">
-                <input type="checkbox" id="dashEnableToggle" />
-                <span class="switch-track"><span class="switch-thumb"></span></span>
+                <input type="checkbox" id="schedEnabled" />
+                <span class="slider"></span>
               </label>
-              <div class="autosend-copy">
-                <strong id="autosendTitle">Automatic sending is on</strong>
-                <small id="autosendHint">Messages will be sent for you at the scheduled times.</small>
+            </div>
+
+            <div class="form-group mt-4">
+              <label class="form-label">Destination WhatsApp Group / Chat Name</label>
+              <input type="text" id="schedGroupName" class="input-text" placeholder="e.g. LADO RANI or Night Patrol Team" />
+            </div>
+
+            <div class="form-row mt-4">
+              <div class="form-group col">
+                <label class="form-label">Shift Start (Hour 0-23)</label>
+                <input type="number" id="schedStartHour" class="input-text font-mono" min="0" max="23" value="20" />
+              </div>
+              <div class="form-group col">
+                <label class="form-label">Shift End (Hour 0-23)</label>
+                <input type="number" id="schedEndHour" class="input-text font-mono" min="0" max="23" value="8" />
               </div>
             </div>
 
-            <div class="next-send" id="nextSendCard" hidden>
-              <span class="next-label">Next message</span>
-              <time id="nextSendTime"></time>
-            </div>
-
-            <button class="btn btn-primary btn-block" id="editSetupButton" type="button">Edit setup</button>
-            <a class="btn btn-ghost btn-block" href="/patrol.html">📍 GPS patrol mode</a>
-          </div>
-
-          <section class="card">
-            <div class="card-head">
-              <h2>Upcoming messages</h2>
-              <p>Based on your saved setup</p>
-            </div>
-            <div class="preview-list" id="previewList"></div>
-          </section>
-
-          <section class="card">
-            <div class="card-head">
-              <h2>Activity</h2>
-              <p>Recent sends &amp; connection events</p>
-            </div>
-            <div class="log-list" id="schedulerLogList"></div>
-          </section>
-        </section>
-
-        <!-- ---------- WIZARD (guided setup) ---------- -->
-        <section class="wizard" id="wizard" hidden>
-          <div class="wizard-head">
-            <button class="wizard-close" id="wizardClose" type="button" aria-label="Close setup">✕</button>
-            <div class="progress" id="wizardProgress"></div>
-            <p class="wizard-step-label" id="wizardStepLabel">Step 1 of 5</p>
-          </div>
-
-          <div class="wizard-body">
-            <!-- Step 1: chat -->
-            <div class="wizard-step" data-step="0">
-              <h2>Who gets the messages?</h2>
-              <p class="step-lead">Pick the WhatsApp group or chat the patrol updates should go to.</p>
-              <div class="combo" id="chatCombo">
-                <input id="chatComboInput" type="search" autocomplete="off" placeholder="🔍  Search your groups — or type the exact name" />
-                <input id="groupName" type="hidden" />
-                <div class="combo-menu" id="chatComboMenu" hidden></div>
+            <div class="form-row mt-4">
+              <div class="form-group col">
+                <label class="form-label">Min Interval (Minutes)</label>
+                <input type="number" id="schedMinInterval" class="input-text font-mono" min="10" max="300" value="80" />
               </div>
-              <p class="chat-hint" id="chatHint"></p>
-            </div>
-
-            <!-- Step 2: days -->
-            <div class="wizard-step" data-step="1" hidden>
-              <h2>Which days?</h2>
-              <p class="step-lead">Choose the days a shift <em>starts</em>. This repeats every week.</p>
-              <div class="day-grid" id="dayGrid"></div>
-
-              <details class="soft-details">
-                <summary>Add a one-off date for this week</summary>
-                <div class="soft-details-body">
-                  <p class="hint">Tap a day to add a single extra shift that isn't part of your weekly routine.</p>
-                  <div class="week-grid" id="currentWeekGrid"></div>
-                  <div class="date-adder">
-                    <input id="extraShiftDateInput" type="date" />
-                    <button class="btn btn-ghost" id="addExtraDate" type="button">Add date</button>
-                  </div>
-                  <div class="date-list" id="extraDateList"></div>
-                </div>
-              </details>
-            </div>
-
-            <!-- Step 3: shift -->
-            <div class="wizard-step" data-step="2" hidden>
-              <h2>Day or night shift?</h2>
-              <p class="step-lead">We'll spread the messages naturally across these hours.</p>
-              <div class="shift-type-grid">
-                <label class="shift-type">
-                  <input type="radio" name="shiftType" value="day" />
-                  <span class="shift-emoji">☀️</span>
-                  <strong>Day</strong>
-                  <small id="dayShiftTime">8:00 AM to 8:00 PM</small>
-                </label>
-                <label class="shift-type">
-                  <input type="radio" name="shiftType" value="night" />
-                  <span class="shift-emoji">🌙</span>
-                  <strong>Night</strong>
-                  <small id="nightShiftTime">8:00 PM to 8:00 AM</small>
-                </label>
+              <div class="form-group col">
+                <label class="form-label">Max Interval (Minutes)</label>
+                <input type="number" id="schedMaxInterval" class="input-text font-mono" min="10" max="300" value="90" />
               </div>
             </div>
 
-            <!-- Step 4: message -->
-            <div class="wizard-step" data-step="3" hidden>
-              <h2>What should it say?</h2>
-              <p class="step-lead">This exact message is sent each time. Keep it natural.</p>
-              <textarea id="message" rows="7" placeholder="e.g. Patrol completed and all checkpoints verified secure."></textarea>
+            <div class="form-group mt-4">
+              <label class="form-label">Timezone</label>
+              <input type="text" id="schedTimezone" class="input-text font-mono" value="America/Toronto" />
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Automated Shift Message Template</div>
+            <div class="form-group">
+              <textarea id="schedMessage" class="input-textarea" rows="7" placeholder="Enter message text..."></textarea>
+              <div class="text-hint">Available tags: <code>{time}</code>, <code>{date}</code>, <code>{shift}</code>. Checkpoint & Guard footers are automatically omitted.</div>
             </div>
 
-            <!-- Step 5: review -->
-            <div class="wizard-step" data-step="4" hidden>
-              <h2>Review &amp; turn on</h2>
-              <div class="review-summary" id="reviewSummary"></div>
+            <div class="card-sub-header">Upcoming Shift Preview</div>
+            <div class="preview-box" id="schedPreviewBox">
+              Click "Calculate Timing Preview" to verify the next automated message times.
+            </div>
+            <button class="btn btn-secondary mt-3" id="btnCalcPreview">Calculate Timing Preview</button>
+          </div>
+        </div>
+      </section>
 
-              <div class="autosend review-autosend">
-                <label class="switch">
-                  <input type="checkbox" id="wizardEnableToggle" />
-                  <span class="switch-track"><span class="switch-thumb"></span></span>
-                </label>
-                <div class="autosend-copy">
-                  <strong>Send automatically</strong>
-                  <small>Leave off to preview the schedule without sending anything.</small>
-                </div>
+      <!-- TAB 4: CHECKPOINTS & PATROL -->
+      <section class="tab-pane" id="tab-patrol">
+        <div class="pane-header">
+          <div>
+            <h2 class="pane-title">GPS Checkpoints & Geofence Manager</h2>
+            <p class="pane-desc">Configure guard checkpoints, arrival message formatting, anti-spam spacing, and cooldowns.</p>
+          </div>
+          <div class="btn-group">
+            <button class="btn btn-secondary" id="btnTestPatrol">Test Send</button>
+            <button class="btn btn-primary" id="btnSavePatrol">Save Checkpoints</button>
+          </div>
+        </div>
+
+        <div class="form-grid">
+          <div class="card">
+            <div class="card-title">Patrol Message & Anti-Spam Controls</div>
+            <div class="form-group">
+              <label class="form-label">Patrol Arrival Message Template</label>
+              <textarea id="patrolMessage" class="input-textarea" rows="6" placeholder="Message sent on checkpoint arrival..."></textarea>
+              <div class="text-hint">Internal footers (<code>Checkpoint:</code> / <code>Guard:</code>) are automatically stripped before sending to WhatsApp.</div>
+            </div>
+
+            <div class="form-row mt-4">
+              <div class="form-group col">
+                <label class="form-label">Message Spacing (Minutes)</label>
+                <input type="number" id="patrolMinInterval" class="input-text font-mono" min="0" max="240" step="5" value="0" />
+                <div class="text-hint">Wait period after any message before next send.</div>
               </div>
-
-              <details class="soft-details" id="advancedCard">
-                <summary>Fine-tune timing (optional)</summary>
-                <div class="soft-details-body advanced-content">
-                  <p class="hint">These already have sensible defaults — only change them if you need to.</p>
-                  <label class="field">
-                    <span>Timezone</span>
-                    <input id="timezone" type="text" autocomplete="off" />
-                  </label>
-                  <div class="row">
-                    <label class="field">
-                      <span>Shift starts</span>
-                      <select id="shiftStartHour"></select>
-                    </label>
-                    <label class="field">
-                      <span>Shift ends</span>
-                      <select id="shiftEndHour"></select>
-                    </label>
-                  </div>
-                  <label class="field">
-                    <span>First message</span>
-                    <select id="firstSendAfter"></select>
-                  </label>
-                  <label class="field">
-                    <span>Time between messages</span>
-                    <select id="sendEvery"></select>
-                  </label>
-                  <p class="hint">Exact times are randomized a little around these so the messages look natural, not automated.</p>
-                  <div class="timing-preview" id="timingPreview"></div>
-                </div>
-              </details>
+              <div class="form-group col">
+                <label class="form-label">Checkpoint Cooldown (Minutes)</label>
+                <input type="number" id="patrolCooldown" class="input-text font-mono" min="0" max="240" step="5" value="15" />
+                <div class="text-hint">Re-entry cooldown per individual checkpoint.</div>
+              </div>
             </div>
           </div>
 
-          <div class="wizard-nav">
-            <button class="btn btn-ghost" id="wizardBack" type="button">Back</button>
-            <p class="save-hint" id="saveStatus"></p>
-            <button class="btn btn-primary" id="wizardNext" type="button">Next</button>
-            <button class="btn btn-primary" id="wizardFinish" type="button" hidden>Save &amp; done</button>
+          <div class="card">
+            <div class="card-header-flex">
+              <div class="card-title">Registered Checkpoints (<span id="checkpointCount">0</span>)</div>
+              <button class="btn btn-secondary btn-sm" id="btnAddCheckpoint">+ Add New</button>
+            </div>
+            
+            <div class="checkpoints-table-wrap">
+              <table class="data-table" id="checkpointsTable">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Latitude</th>
+                    <th>Longitude</th>
+                    <th>Radius (m)</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="checkpointsBody">
+                  <tr><td colspan="5" class="text-muted text-center">No checkpoints configured.</td></tr>
+                </tbody>
+              </table>
+            </div>
           </div>
-        </section>
+        </div>
+      </section>
+
+      <!-- TAB 5: LOGS & DIAGNOSTICS -->
+      <section class="tab-pane" id="tab-logs">
+        <div class="pane-header">
+          <div>
+            <h2 class="pane-title">Real-Time Activity & Diagnostic Logs</h2>
+            <p class="pane-desc">Live audit trail of guard arrivals, WhatsApp dispatches, cooldown skips, and system events.</p>
+          </div>
+          <div class="btn-group">
+            <button class="btn btn-secondary" id="btnCopyLogs">Copy All</button>
+            <button class="btn btn-danger" id="btnClearLogs">Clear Logs</button>
+          </div>
+        </div>
+
+        <div class="logs-filter-bar">
+          <div class="filter-chips">
+            <button class="chip active" data-filter="all">All Logs</button>
+            <button class="chip" data-filter="patrol">Patrol GPS</button>
+            <button class="chip" data-filter="schedule">Schedules</button>
+            <button class="chip" data-filter="error">Errors</button>
+          </div>
+          <input type="text" id="logSearch" class="input-text log-search" placeholder="Filter log text…" />
+        </div>
+
+        <div class="logs-container" id="logsContainer">
+          <div class="loading-spinner">Streaming activity logs…</div>
+        </div>
       </section>
     </main>
 
-    <script src="/app.js"></script>
+    <!-- Master Admin Auth Modal -->
+    <div class="modal-overlay" id="authModal" hidden>
+      <div class="modal-card">
+        <div class="modal-header">
+          <div class="modal-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          </div>
+          <h3>Master Admin Login</h3>
+          <p>Enter your master <code>PATROL_TOKEN</code> to unlock full server administration controls.</p>
+        </div>
+        <form id="authForm">
+          <div class="form-group">
+            <input type="password" id="adminTokenInput" class="input-text font-mono" placeholder="Enter master PATROL_TOKEN…" autocomplete="off" required />
+          </div>
+          <div class="modal-actions">
+            <button type="submit" class="btn btn-primary btn-block">Unlock Dashboard</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Reset PIN Modal -->
+    <div class="modal-overlay" id="pinModal" hidden>
+      <div class="modal-card">
+        <div class="modal-header">
+          <div class="modal-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21 2-2 2m-6 6 2 2 4-4-2-2-4 4Z"/><path d="m3 21 6-6"/><path d="m8 16 2 2"/><path d="m11 13 2 2"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></svg>
+          </div>
+          <h3>Reset Guard PIN</h3>
+          <p>Assign a new 4-digit security PIN for guard <strong id="pinTargetName">--</strong>.</p>
+        </div>
+        <form id="pinForm">
+          <input type="hidden" id="pinTargetId" />
+          <div class="form-group">
+            <label class="form-label">New Security PIN (at least 4 digits)</label>
+            <input type="password" id="newPinInput" class="input-text font-mono" placeholder="e.g. 1234" maxlength="12" required />
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn btn-secondary" id="btnCancelPin">Cancel</button>
+            <button type="submit" class="btn btn-primary">Update PIN</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Add Guard Modal -->
+    <div class="modal-overlay" id="addGuardModal" hidden>
+      <div class="modal-card">
+        <div class="modal-header">
+          <div class="modal-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>
+          </div>
+          <h3>Register New Guard</h3>
+          <p>Create a guard profile with a phone number and security PIN.</p>
+        </div>
+        <form id="addGuardForm">
+          <div class="form-group">
+            <label class="form-label">Guard Phone Number / Name</label>
+            <input type="text" id="newGuardName" class="input-text font-mono" placeholder="e.g. 6478974258" required />
+          </div>
+          <div class="form-group mt-3">
+            <label class="form-label">Initial Security PIN (at least 4 digits)</label>
+            <input type="password" id="newGuardPin" class="input-text font-mono" placeholder="e.g. 1234" required />
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn btn-secondary" id="btnCancelAddGuard">Cancel</button>
+            <button type="submit" class="btn btn-primary">Create Profile</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="app.js"></script>
   </body>
 </html>
