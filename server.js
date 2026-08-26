@@ -1216,6 +1216,10 @@ function createWhatsappClient(runtime) {
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-gpu',
+      '--disable-accelerated-2d-canvas',
+      '--no-first-run',
+      '--no-zygote',
+      '--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
     ],
   };
 
@@ -1228,6 +1232,11 @@ function createWhatsappClient(runtime) {
       dataPath: runtime.paths.authDir,
     }),
     puppeteer: puppeteerOptions,
+    webVersionCache: {
+      type: 'remote',
+      remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/{version}.html',
+      strict: false,
+    },
   });
 }
 
