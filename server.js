@@ -1704,7 +1704,7 @@ const server = http.createServer(async (request, response) => {
           error: runtime ? runtime.state.error : null,
           chats: runtime ? runtime.state.chats : [],
           config: runtime ? loadConfigFromPath(runtime.paths.configPath) : null,
-          patrolState: runtime ? readPatrolState(runtime) : null,
+          patrolState: runtime ? loadPatrolState(runtime) : null,
           logs: runtime ? (runtime.logs || []).slice(-30).reverse() : [],
         };
       });
@@ -1810,7 +1810,7 @@ const server = http.createServer(async (request, response) => {
         sendJson(response, 404, { error: `Unknown account "${accountId}".` });
         return;
       }
-      const existing = readPatrolState(runtime);
+      const existing = loadPatrolState(runtime);
       const merged = { ...existing, ...(payload.patrolState || payload) };
       savePatrolState(runtime, merged);
       sendJson(response, 200, { ok: true, patrolState: merged });
