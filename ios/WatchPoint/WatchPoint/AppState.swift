@@ -18,7 +18,7 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
     // Guard identity, patrol settings, checkpoints, session state, dedupe
     // state, and history all live on the Scheduler API.
     @AppStorage("schedulerAdminBaseURL") var schedulerAdminBaseURL = productionSchedulerAdminURL
-    @AppStorage("selectedAdminAccountId") var selectedAdminAccountId = "main"
+    @AppStorage("selectedAdminAccountId") var selectedAdminAccountId = ""
     @AppStorage("watchpoint.appLockEnabled") var appLockEnabled = true
     @Published var accuracyThresholdMeters = 50.0
     @Published var checkpointCooldownMinutes = 12.0
@@ -497,8 +497,8 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
 
         do {
             adminAccounts = try await api.accounts()
-            if !adminAccounts.contains(where: { $0.id == selectedAdminAccountId }) {
-                selectedAdminAccountId = adminAccounts.first?.id ?? "main"
+            if selectedAdminAccountId.isEmpty || !adminAccounts.contains(where: { $0.id == selectedAdminAccountId }) {
+                selectedAdminAccountId = adminAccounts.first?.id ?? ""
             }
         } catch {
             presentError(error)
@@ -614,7 +614,7 @@ final class AppState: NSObject, ObservableObject, CLLocationManagerDelegate {
             let response = try await api.deleteAccount()
             KeychainStore.clearToken(accountId: selectedAdminAccountId)
             adminAccounts = response.accounts
-            await selectAccount(response.accounts.first?.id ?? "main", confirmsGuard: true)
+            await selectAccount(response.accounts.first?.id ?? "", confirmsGuard: true)
         } catch {
             presentError(error)
         }
