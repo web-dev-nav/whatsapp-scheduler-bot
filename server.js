@@ -305,22 +305,36 @@ function setAccountPassword(accountId, password) {
 }
 
 function createAccount(name, password) {
-  const accounts = readAccounts();
-  const baseId = slugifyAccountId(name);
-  let id = baseId;
-  let suffix = 2;
+  const trimmedName = String(name || '').trim();
+  if (!trimmedName) {
+    const err = new Error('Phone number or guard name is required.');
+    err.statusCode = 400;
+    throw err;
+  }
 
-  while (accounts.some((account) => account.id === id)) {
-    id = `${baseId}-${suffix}`;
-    suffix += 1;
+  const id = slugifyAccountId(trimmedName);
+  const accounts = readAccounts();
+
+  const existing = accounts.find(
+    (account) => account.id === id || account.name.toLowerCase() === trimmedName.toLowerCase()
+  );
+
+  if (existing) {
+    const err = new Error(`An account with phone number "${trimmedName}" already exists. Please sign in with your PIN instead.`);
+    err.statusCode = 409;
+    err.code = 'ACCOUNT_EXISTS';
+    err.existingAccountId = existing.id;
+    throw err;
   }
 
   const trimmedPassword = String(password || '');
   if (trimmedPassword.length < 4) {
-    throw new Error('Password must be at least 4 characters.');
+    const err = new Error('Security PIN / password must be at least 4 digits.');
+    err.statusCode = 400;
+    throw err;
   }
 
-  const account = { id, name: String(name || id).trim() || id, ...hashPassword(trimmedPassword) };
+  const account = { id, name: trimmedName, ...hashPassword(trimmedPassword) };
   accounts.push(account);
   writeAccounts(accounts);
   getRuntime(account.id);
@@ -1651,11 +1665,20 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === 'POST' && pathname === '/api/accounts') {
-      const body = await readRequestBody(request);
-      const payload = JSON.parse(body || '{}');
-      const account = createAccount(payload.name, payload.password);
-      const token = createAccountSession(account.id);
-      sendJson(response, 201, { account: publicAccount(account), accounts: publicAccounts(), token });
+      try {
+        const body = await readRequestBody(request);
+        const payload = JSON.parse(body || '{}');
+        const account = createAccount(payload.name, payload.password);
+        const token = createAccountSession(account.id);
+        sendJson(response, 201, { account: publicAccount(account), accounts: publicAccounts(), token });
+      } catch (err) {
+        const status = err.statusCode || (err.message && err.message.includes('already exists') ? 409 : 400);
+        sendJson(response, status, {
+          error: err.message,
+          code: err.code || 'BAD_REQUEST',
+          existingAccountId: err.existingAccountId || null,
+        });
+      }
       return;
     }
 
