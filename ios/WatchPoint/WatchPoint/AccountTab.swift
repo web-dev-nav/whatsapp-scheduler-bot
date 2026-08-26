@@ -380,21 +380,25 @@ struct WhatsAppSessionView: View {
         List {
             currentSessionSection
 
-            WhatsAppPairingCard(appState: appState)
+            if appState.whatsAppState?.status != "ready" {
+                WhatsAppPairingCard(appState: appState)
 
-            if let url = appState.pairingPageURL, appState.whatsAppState?.status != "ready" {
-                Section {
-                    ShareLink(item: url) {
-                        Label("Share Pairing Link", systemImage: "square.and.arrow.up")
-                    }
-                    Button {
-                        appState.skipAppLockOnce = true
-                        Haptics.impact(.light)
-                        openURL(url)
-                    } label: {
-                        Label("Open QR in Safari", systemImage: "safari")
+                if let url = appState.pairingPageURL {
+                    Section {
+                        ShareLink(item: url) {
+                            Label("Share Pairing Link", systemImage: "square.and.arrow.up")
+                        }
+                        Button {
+                            appState.skipAppLockOnce = true
+                            Haptics.impact(.light)
+                            openURL(url)
+                        } label: {
+                            Label("Open QR in Safari", systemImage: "safari")
+                        }
                     }
                 }
+            } else {
+                connectedSessionDetailsSection
             }
 
             if !appState.adminToken.isEmpty {
@@ -512,6 +516,18 @@ struct WhatsAppSessionView: View {
         case "ready": return .green
         case "error", "disconnected": return .red
         default: return .orange
+        }
+    }
+
+    private var connectedSessionDetailsSection: some View {
+        Section {
+            LabeledContent("WhatsApp Account", value: appState.whatsAppState?.account?.name ?? appState.selectedAccountName)
+            LabeledContent("Connection Status", value: "Ready & Active")
+            LabeledContent("Available Chats", value: "\(appState.whatsAppState?.chats.count ?? 0)")
+        } header: {
+            Text("Session Details")
+        } footer: {
+            Text("WhatsApp is connected. Arrival notifications and patrol alerts will be dispatched through this device.")
         }
     }
 
