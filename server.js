@@ -25,6 +25,7 @@ const DATA_DIR = path.resolve(process.env.DATA_DIR || __dirname);
 const PATROL_TRIGGER_TOKEN = (process.env.PATROL_TRIGGER_TOKEN || '').trim();
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const ACCOUNTS_PATH = path.resolve(process.env.ACCOUNTS_PATH || path.join(DATA_DIR, 'accounts.json'));
+const SESSIONS_PATH = path.resolve(process.env.SESSIONS_PATH || path.join(DATA_DIR, 'sessions.json'));
 const LEGACY_SEND_HISTORY_PATH = path.resolve(
   process.env.SEND_HISTORY_PATH || path.join(DATA_DIR, 'send-history.json')
 );
@@ -33,8 +34,9 @@ const LEGACY_WHATSAPP_AUTH_DIR = path.resolve(
 );
 const MS_PER_MINUTE = 60 * 1000;
 const MS_PER_DAY = 24 * 60 * MS_PER_MINUTE;
-// How long an account session token stays valid after login.
-const SESSION_TOKEN_TTL_MS = Number(process.env.SESSION_TOKEN_TTL_HOURS || 24) * 60 * MS_PER_MINUTE;
+// How long an account session token stays valid after login (default 90 days with sliding window).
+const DEFAULT_SESSION_TTL_HOURS = 2160;
+const SESSION_TOKEN_TTL_MS = Number(process.env.SESSION_TOKEN_TTL_HOURS || DEFAULT_SESSION_TTL_HOURS) * 60 * MS_PER_MINUTE;
 // Login attempt limiting for POST /api/accounts/auth, keyed by IP+account.
 const AUTH_ATTEMPT_WINDOW_MS = 15 * MS_PER_MINUTE;
 const AUTH_ATTEMPT_LOCKOUT_MS = 15 * MS_PER_MINUTE;
@@ -51,6 +53,62 @@ const startedAt = new Date();
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(path.dirname(ACCOUNTS_PATH), { recursive: true });
+
+function readSessionsFromDisk() {
+  try {
+    if (!fs.existsSync(SESSIONS_PATH)) return;
+    const data = JSON.parse(fs.readFileSync(SESSIONS_PATH, 'utf8'));
+    const raw = data?.sessions || data || {};
+    const now = Date.now();
+    for (const [token, session] of Object.entries(raw)) {
+      if (session && session.accountId && typeof token === 'string') {
+        const lastActive = session.lastUsedAt || session.createdAt || 0;
+        if (now - lastActive <= SESSION_TOKEN_TTL_MS) {
+          accountSessions.set(token, {
+            accountId: session.accountId,
+            createdAt: session.createdAt || now,
+            lastUsedAt: session.lastUsedAt || now,
+          });
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[SessionStore] Could not read sessions from disk:', err.message);
+  }
+}
+
+let saveSessionsTimer = null;
+function scheduleSaveSessions() {
+  if (saveSessionsTimer) return;
+  saveSessionsTimer = setTimeout(() => {
+    saveSessionsTimer = null;
+    writeSessionsToDisk();
+  }, 1000);
+}
+
+function writeSessionsToDisk() {
+  try {
+    const obj = {};
+    const now = Date.now();
+    for (const [token, session] of accountSessions.entries()) {
+      const lastActive = session.lastUsedAt || session.createdAt || 0;
+      if (now - lastActive <= SESSION_TOKEN_TTL_MS) {
+        obj[token] = {
+          accountId: session.accountId,
+          createdAt: session.createdAt,
+          lastUsedAt: session.lastUsedAt || session.createdAt,
+        };
+      } else {
+        accountSessions.delete(token);
+      }
+    }
+    fs.writeFileSync(SESSIONS_PATH, `${JSON.stringify({ sessions: obj }, null, 2)}\n`);
+  } catch (err) {
+    console.error('[SessionStore] Could not write sessions to disk:', err.message);
+  }
+}
+
+readSessionsFromDisk();
 
 function slugifyAccountId(name) {
   const slug = String(name)
@@ -132,7 +190,9 @@ function verifyPassword(account, password) {
 
 function createAccountSession(accountId) {
   const token = crypto.randomBytes(32).toString('hex');
-  accountSessions.set(token, { accountId, createdAt: Date.now() });
+  const now = Date.now();
+  accountSessions.set(token, { accountId, createdAt: now, lastUsedAt: now });
+  writeSessionsToDisk();
   return token;
 }
 
@@ -165,9 +225,15 @@ function requireAccountAuth(request, response, accountId) {
 
   const token = authTokenFromRequest(request);
   const session = accountSessions.get(token);
-  if (session && Date.now() - session.createdAt > SESSION_TOKEN_TTL_MS) {
+  const now = Date.now();
+  const lastActive = session ? (session.lastUsedAt || session.createdAt || 0) : 0;
+
+  if (session && now - lastActive > SESSION_TOKEN_TTL_MS) {
     accountSessions.delete(token);
+    scheduleSaveSessions();
   } else if (session && session.accountId === account.id) {
+    session.lastUsedAt = now;
+    scheduleSaveSessions();
     return true;
   }
 
@@ -298,6 +364,7 @@ async function deleteAccount(accountId) {
   for (const [token, session] of accountSessions.entries()) {
     if (session.accountId === account.id) accountSessions.delete(token);
   }
+  writeSessionsToDisk();
 
   const accounts = existingAccounts.filter((candidate) => candidate.id !== account.id);
   writeAccounts(accounts);
@@ -1372,11 +1439,12 @@ function sendPairPage(url, response) {
   const token = url.searchParams.get('token') || '';
   const account = resolveAccountRef(accountId);
   const session = accountSessions.get(token);
+  const lastActive = session ? (session.lastUsedAt || session.createdAt || 0) : 0;
   const authorized = Boolean(
     account &&
     session &&
     session.accountId === account.id &&
-    Date.now() - session.createdAt <= SESSION_TOKEN_TTL_MS
+    Date.now() - lastActive <= SESSION_TOKEN_TTL_MS
   );
 
   let status = 'unauthorized';
@@ -1523,12 +1591,16 @@ function findReadyRuntime() {
 
 function buildHealthResponse() {
   const now = Date.now();
+  let pruned = false;
 
   for (const [token, session] of accountSessions.entries()) {
-    if (now - session.createdAt > SESSION_TOKEN_TTL_MS) {
+    const lastActive = session.lastUsedAt || session.createdAt || 0;
+    if (now - lastActive > SESSION_TOKEN_TTL_MS) {
       accountSessions.delete(token);
+      pruned = true;
     }
   }
+  if (pruned) scheduleSaveSessions();
 
   const accounts = readAccounts();
   const connectedAccounts = accounts.reduce((count, account) => {
