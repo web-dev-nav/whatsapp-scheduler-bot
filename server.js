@@ -161,13 +161,15 @@ function publicAccounts() {
   return readAccounts().map(publicAccount);
 }
 
-function getAccount(accountId = 'main') {
-  return readAccounts().find((account) => account.id === accountId);
+function getAccount(accountId) {
+  const accounts = readAccounts();
+  if (!accountId) return accounts[0] || null;
+  return accounts.find((account) => account.id === accountId) || (accountId === 'main' ? accounts[0] : null) || null;
 }
 
 function resolveAccountRef(ref) {
   const value = String(ref || '').trim();
-  if (!value) return null;
+  if (!value) return getAccount();
   return (
     getAccount(value) ||
     getAccount(slugifyAccountId(value)) ||
@@ -467,7 +469,7 @@ function createRuntime(account) {
   };
 }
 
-function getRuntime(accountId = 'main') {
+function getRuntime(accountId) {
   const account = getAccount(accountId);
 
   if (!account) {
@@ -1586,7 +1588,10 @@ function sendStatic(request, response) {
 }
 
 function accountFromUrl(url) {
-  return url.searchParams.get('account') || 'main';
+  const param = url.searchParams.get('account');
+  if (param) return param;
+  const account = getAccount();
+  return account?.id || 'main';
 }
 
 function requireRuntime(response, accountId) {
