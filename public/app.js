@@ -46,6 +46,8 @@ const el = {
   qrPlaceholder: document.getElementById('qrPlaceholder'),
   qrStatusText: document.getElementById('qrStatusText'),
   qrImage: document.getElementById('qrImage'),
+  qrHelpBlock: document.getElementById('qrHelpBlock'),
+  qrCardTitle: document.getElementById('qrCardTitle'),
   waActiveAccount: document.getElementById('waActiveAccount'),
   waStatusPill: document.getElementById('waStatusPill'),
   waTargetGroup: document.getElementById('waTargetGroup'),
@@ -93,7 +95,6 @@ const urlParams = new URLSearchParams(window.location.search);
 if (urlParams.get('token') || urlParams.get('adminToken')) {
   state.adminToken = urlParams.get('token') || urlParams.get('adminToken');
   localStorage.setItem('watchpoint_admin_token', state.adminToken);
-  // Clean URL without reload
   window.history.replaceState({}, document.title, window.location.pathname);
 }
 
@@ -290,17 +291,36 @@ function renderActiveAccountData() {
   el.waChatsCount.textContent = (current.chats || []).length;
 
   if (status === 'ready') {
+    if (el.qrCardTitle) el.qrCardTitle.textContent = 'WhatsApp Session Status';
     el.qrImage.hidden = true;
     el.qrPlaceholder.style.display = 'flex';
-    el.qrPlaceholder.innerHTML = '<div style="color:#10b981;font-size:36px;">✓</div><span style="color:#059669;">WhatsApp is Linked & Connected!</span>';
+    el.qrPlaceholder.innerHTML = `
+      <div class="session-connected-box">
+        <div class="connected-badge">✓ LINKED & ACTIVE</div>
+        <div class="connected-text">WhatsApp is Connected</div>
+        <p class="connected-sub">This phone number is actively linked to the multi-device server. All automated shift messages and patrol geofence arrivals will be dispatched automatically.</p>
+        <button class="btn btn-danger btn-sm mt-3" onclick="unlinkAndNewQR()">Unlink Device / Generate New QR</button>
+      </div>
+    `;
+    if (el.qrHelpBlock) el.qrHelpBlock.style.display = 'none';
   } else if (current.qrDataUrl) {
+    if (el.qrCardTitle) el.qrCardTitle.textContent = 'Live Pairing QR Code';
     el.qrPlaceholder.style.display = 'none';
     el.qrImage.src = current.qrDataUrl;
     el.qrImage.hidden = false;
+    if (el.qrHelpBlock) el.qrHelpBlock.style.display = 'block';
   } else {
+    if (el.qrCardTitle) el.qrCardTitle.textContent = 'WhatsApp Connection';
     el.qrImage.hidden = true;
     el.qrPlaceholder.style.display = 'flex';
-    el.qrPlaceholder.innerHTML = '<div class="spinner"></div><span>Generating WhatsApp QR Code…</span>';
+    el.qrPlaceholder.innerHTML = `
+      <div class="session-connected-box">
+        <div class="spinner"></div>
+        <span style="font-weight:600;margin-top:10px;">${current.error ? 'Error: ' + current.error : 'Starting WhatsApp client…'}</span>
+        <button class="btn btn-secondary btn-sm mt-3" onclick="forceNewQR()">Force Generate QR</button>
+      </div>
+    `;
+    if (el.qrHelpBlock) el.qrHelpBlock.style.display = 'none';
   }
 
   // Populate Chat Picker
@@ -531,7 +551,7 @@ el.btnTestPatrol.addEventListener('click', async () => {
   const confirmed = confirm('Trigger a test patrol arrival send now to WhatsApp?');
   if (!confirmed) return;
   try {
-    const res = await apiRequest(`/api/patrol/trigger?account=${state.currentAccountId}&dryRun=0`, {
+    await apiRequest(`/api/patrol/trigger?account=${state.currentAccountId}&dryRun=0`, {
       method: 'POST',
       body: JSON.stringify({ source: 'admin-web-console', checkpointName: 'Test Checkpoint' }),
     });
@@ -624,34 +644,36 @@ window.deleteGuard = async (accountId, accountName) => {
 };
 
 // WhatsApp Session Actions
-el.btnRestartWhatsApp.addEventListener('click', async () => {
-  try {
-    await apiRequest('/api/admin/whatsapp/reconnect', {
-      method: 'POST',
-      body: JSON.stringify({ accountId: state.currentAccountId }),
-    });
-    showToast('WhatsApp client restarting to generate fresh QR code…', 'info');
-    loadOverview();
-  } catch (err) {
-    showToast(err.message, 'error');
-  }
-});
-
-el.btnLogoutWhatsApp.addEventListener('click', async () => {
-  const confirmed = confirm('Unlink this WhatsApp session? You will need to scan the QR code again.');
+window.unlinkAndNewQR = async () => {
+  const confirmed = confirm('Unlink this active WhatsApp session and generate a fresh QR code?');
   if (!confirmed) return;
-
   try {
     await apiRequest('/api/admin/whatsapp/logout', {
       method: 'POST',
       body: JSON.stringify({ accountId: state.currentAccountId }),
     });
-    showToast('WhatsApp session unlinked.', 'success');
+    showToast('Unlinking session… Fresh QR code is generating!', 'info');
     loadOverview();
   } catch (err) {
     showToast(err.message, 'error');
   }
-});
+};
+
+window.forceNewQR = async () => {
+  try {
+    await apiRequest('/api/admin/whatsapp/logout', {
+      method: 'POST',
+      body: JSON.stringify({ accountId: state.currentAccountId }),
+    });
+    showToast('Restarting WhatsApp and generating fresh QR…', 'info');
+    loadOverview();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+};
+
+el.btnRestartWhatsApp.addEventListener('click', window.forceNewQR);
+el.btnLogoutWhatsApp.addEventListener('click', window.unlinkAndNewQR);
 
 // Apply Chat from dropdown
 el.btnApplyChat.addEventListener('click', () => {

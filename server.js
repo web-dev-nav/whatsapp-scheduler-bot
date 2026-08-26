@@ -1756,7 +1756,7 @@ const server = http.createServer(async (request, response) => {
         sendJson(response, 404, { error: `Unknown account "${accountId}".` });
         return;
       }
-      startWhatsappClient(runtime, true);
+      await logoutWhatsappClient(runtime);
       sendJson(response, 200, { ok: true, status: runtime.state.status });
       return;
     }
@@ -1771,15 +1771,19 @@ const server = http.createServer(async (request, response) => {
         sendJson(response, 404, { error: `Unknown account "${accountId}".` });
         return;
       }
+      resetWhatsappState(runtime, 'logging_out');
+      clearScheduler(runtime);
+      clearWhatsappRestart(runtime);
       if (runtime.client) {
-        try {
-          await runtime.client.logout();
-        } catch (_) {}
+        try { await runtime.client.logout(); } catch (_) {}
+        try { await runtime.client.destroy(); } catch (_) {}
       }
-      runtime.state.status = 'disconnected';
-      runtime.state.qrDataUrl = null;
-      startWhatsappClient(runtime, true);
-      sendJson(response, 200, { ok: true, message: 'WhatsApp session unlinked.' });
+      runtime.client = null;
+      try {
+        fs.rmSync(path.join(runtime.paths.authDir, 'session'), { recursive: true, force: true });
+      } catch (_) {}
+      startWhatsappClient(runtime);
+      sendJson(response, 200, { ok: true, message: 'WhatsApp session unlinked. Fresh QR code generated.' });
       return;
     }
 
