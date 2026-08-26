@@ -235,6 +235,9 @@ struct LoginView: View {
                 pinCode = ""
             } else {
                 Haptics.notification(.error)
+                if let msg = appState.alertMessage, msg.localizedCaseInsensitiveContains("already exists") {
+                    focusedField = .pinCode
+                }
             }
         }
     }
