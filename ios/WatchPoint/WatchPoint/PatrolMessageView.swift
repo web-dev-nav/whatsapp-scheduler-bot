@@ -2,8 +2,7 @@
 //  PatrolMessageView.swift
 //  WatchPoint
 //
-//  Separate message editor for GPS checkpoint-arrival sends. Automatic timed
-//  messages remain in SetupView so guards cannot accidentally edit both paths.
+//  Message editor for GPS checkpoint-arrival sends with live WhatsApp preview bubble.
 //
 
 import SwiftUI
@@ -16,28 +15,46 @@ struct PatrolMessageView: View {
 
     var body: some View {
         Form {
-            Section("Checkpoint Arrival Message") {
+            Section {
                 TextEditor(text: $draftMessage)
-                    .frame(minHeight: 180)
+                    .scrollContentBackground(.hidden)
+                    .frame(minHeight: 140)
+                    .padding(4)
+                    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(Color(.separator).opacity(0.4), lineWidth: 0.8)
+                    )
+            } header: {
+                Text("Checkpoint Arrival Message")
+            } footer: {
+                Text("Sent automatically when an active patrol enters any checkpoint perimeter. Checkpoint and guard names remain in your internal WatchPoint activity.")
+            }
 
-                Text("Sent when an active patrol enters a checkpoint radius. Only this text is sent to WhatsApp; checkpoint and guard names stay in WatchPoint activity.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+            Section("Live Message Preview") {
+                WhatsAppBubblePreview(
+                    message: draftMessage,
+                    chatName: appState.patrolConfig?.groupName.isEmpty == false ? appState.patrolConfig!.groupName : "Security Ops"
+                )
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
             }
 
             Section {
                 Button {
+                    Haptics.impact(.medium)
                     save()
                 } label: {
                     if appState.isConfigLoading {
-                        ProgressView()
-                            .frame(maxWidth: .infinity)
+                        ProgressView().tint(.white).frame(maxWidth: .infinity)
                     } else {
-                        Label("Save Patrol Message", systemImage: "checkmark.circle")
+                        Label("Save Patrol Message", systemImage: "checkmark.circle.fill")
+                            .fontWeight(.semibold)
                             .frame(maxWidth: .infinity)
                     }
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(.green)
                 .controlSize(.large)
                 .disabled(appState.isConfigLoading || draftMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
@@ -56,9 +73,11 @@ struct PatrolMessageView: View {
             loadDraftIfNeeded()
         }
         .alert("Saved", isPresented: $showSavedConfirmation) {
-            Button("OK", role: .cancel) {}
+            Button("OK", role: .cancel) {
+                Haptics.impact(.light)
+            }
         } message: {
-            Text("Your checkpoint-arrival patrol message has been saved.")
+            Text("Your checkpoint-arrival patrol message template has been saved.")
         }
     }
 
@@ -78,9 +97,11 @@ struct PatrolMessageView: View {
 
         Task {
             if await appState.saveConfig() {
+                Haptics.notification(.success)
                 draftMessage = appState.patrolConfig?.patrol.message ?? trimmedMessage
                 showSavedConfirmation = true
             } else {
+                Haptics.notification(.error)
                 appState.patrolConfig = previousConfig
             }
         }

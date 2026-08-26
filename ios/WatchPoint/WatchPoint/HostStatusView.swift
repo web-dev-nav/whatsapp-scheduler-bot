@@ -2,20 +2,11 @@
 //  HostStatusView.swift
 //  WatchPoint
 //
-//  Full detail about the single Scheduler API backend with a semantic
-//  health check. Built
-//  after diagnosing a real admin-Funnel TLS outage by hand with `curl`;
-//  this makes that kind of check available in-app instead of the guard
-//  only seeing a cryptic system alert ("a TLS error caused the secure
-//  connection to fail") with no way to tell what's actually wrong.
+//  Scheduler API and engine health diagnostics with round-trip latency checks.
 //
 
 import SwiftUI
 
-/// Result of pinging a URL just to prove it's reachable over HTTPS -- not a
-/// semantic health check. Any HTTP response (even a 404/405) counts as
-/// reachable, since the goal is distinguishing "network/TLS is broken" from
-/// "the app-level request was rejected."
 private struct ReachabilityResult {
     enum Level {
         case healthy, warning, failed
@@ -35,11 +26,13 @@ struct HostStatusView: View {
 
     var body: some View {
         Form {
-            Section("Versions & Compatibility") {
+            // Version Compatibility Section
+            Section("Compatibility & Engine Version") {
                 LabeledContent("WatchPoint iOS", value: AppRelease.displayVersion)
-                LabeledContent("Minimum iOS", value: engineHealth?.minimumIOSVersion ?? "Checking…")
+                LabeledContent("Minimum iOS Required", value: engineHealth?.minimumIOSVersion ?? "Checking…")
                 LabeledContent("Scheduler Engine", value: engineHealth?.engineVersion ?? "Checking…")
                 LabeledContent("Required Engine", value: AppRelease.requiredEngineVersion)
+
                 HStack {
                     Label(
                         appState.versionCompatibilityLabel,
@@ -48,62 +41,75 @@ struct HostStatusView: View {
                             : "exclamationmark.triangle.fill"
                     )
                     .foregroundStyle(appState.versionCompatibilityLabel == "Up to date" ? .green : .orange)
+                    .font(.subheadline.weight(.semibold))
                     Spacer()
                 }
             }
 
-            Section("This Account") {
-                LabeledContent("Guard", value: appState.guardName)
-                LabeledContent("Account", value: currentAccountName)
+            // Active Account Status
+            Section("Active Account Details") {
+                LabeledContent("Guard Identity", value: appState.guardDisplayName)
+                LabeledContent("Account ID", value: currentAccountName)
                 LabeledContent("WhatsApp Status", value: appState.whatsAppState?.status ?? "unknown")
                 LabeledContent("Chats Loaded", value: "\(appState.whatsAppState?.chats.count ?? 0)")
             }
 
+            // Connection & Ping Latency Section
             Section {
-                LabeledContent("URL", value: appState.schedulerAdminBaseURL)
-                resultRow(adminResult)
-            } header: {
-                Text("Admin API")
-            } footer: {
-                Text("The iOS UI uses this API for accounts, WhatsApp, schedules, checkpoints, patrol state, GPS arrivals, and history.")
-            }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Admin Endpoint")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    Text(appState.schedulerAdminBaseURL)
+                        .font(.footnote.monospaced())
+                        .foregroundStyle(.primary)
+                }
 
-            Section {
+                resultRow(adminResult)
+
                 Button {
+                    Haptics.impact(.medium)
                     Task { await runChecks() }
                 } label: {
                     if isChecking {
                         HStack {
                             Spacer()
-                            ProgressView()
+                            ProgressView().tint(.white)
                             Spacer()
                         }
                     } else {
-                        Text("Check Now")
+                        Label("Ping Server Now", systemImage: "arrow.clockwise")
+                            .fontWeight(.semibold)
                             .frame(maxWidth: .infinity)
                     }
                 }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
                 .disabled(isChecking)
+            } header: {
+                Text("Connection & Latency")
+            } footer: {
+                Text("WatchPoint uses this endpoint for guard accounts, live GPS arrivals, and patrol synchronization.")
             }
 
+            // Server Diagnostics Metrics
             Section {
                 if let health = engineHealth {
-                    LabeledContent("Status", value: health.status.capitalized)
-                    LabeledContent("Node", value: health.nodeVersion)
-                    LabeledContent("Uptime", value: uptimeLabel(health.uptimeSeconds))
+                    LabeledContent("Engine Status", value: health.status.uppercased())
+                    LabeledContent("Node Runtime", value: health.nodeVersion)
+                    LabeledContent("System Uptime", value: uptimeLabel(health.uptimeSeconds))
                     LabeledContent("WhatsApp Accounts", value: "\(health.connectedAccounts) / \(health.totalAccounts) connected")
-                    LabeledContent("Active Logins", value: "\(health.activeSessions)")
+                    LabeledContent("Active Sessions", value: "\(health.activeSessions)")
                 } else {
-                    Text("Engine diagnostics are unavailable until the Admin API health check succeeds.")
+                    Text("Diagnostics are loaded upon server health check.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
             } header: {
-                Text("Engine Diagnostics")
+                Text("Server Health Metrics")
             }
-
         }
-        .navigationTitle("Test Server Connection")
+        .navigationTitle("Test Connection")
         .navigationBarTitleDisplayMode(.inline)
         .task { await runChecks() }
     }
@@ -116,23 +122,27 @@ struct HostStatusView: View {
     @ViewBuilder
     private func resultRow(_ result: ReachabilityResult?) -> some View {
         if let result {
-            HStack {
+            HStack(spacing: 12) {
                 Image(systemName: resultIcon(result.level))
+                    .font(.title3)
                     .foregroundStyle(resultColor(result.level))
-                VStack(alignment: .leading, spacing: 2) {
+
+                VStack(alignment: .leading, spacing: 3) {
                     Text(result.detail)
-                        .font(.subheadline)
+                        .font(.subheadline.weight(.semibold))
                     Text(subtitle(for: result))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
+            .padding(.vertical, 2)
         } else {
-            HStack {
+            HStack(spacing: 10) {
                 ProgressView()
-                Text("Checking…")
+                Text("Pinging server…")
                     .foregroundStyle(.secondary)
             }
+            .padding(.vertical, 2)
         }
     }
 
@@ -154,9 +164,9 @@ struct HostStatusView: View {
 
     private func subtitle(for result: ReachabilityResult) -> String {
         var parts: [String] = []
-        if let ms = result.roundTripMs { parts.append("\(ms) ms") }
-        parts.append("checked \(result.checkedAt.formatted(date: .omitted, time: .shortened))")
-        return parts.joined(separator: " · ")
+        if let ms = result.roundTripMs { parts.append("\(ms) ms latency") }
+        parts.append("Checked at \(result.checkedAt.formatted(date: .omitted, time: .shortened))")
+        return parts.joined(separator: " • ")
     }
 
     private func runChecks() async {
@@ -185,39 +195,13 @@ struct HostStatusView: View {
             return (
                 ReachabilityResult(
                     level: health.status != "ok" ? .failed : isCompatible ? .healthy : .warning,
-                    detail: isCompatible ? "API \(health.status)" : "API reachable — engine update required",
+                    detail: isCompatible ? "API Operational (\(health.status))" : "API reachable — server update required",
                     roundTripMs: elapsedMs,
                     checkedAt: Date()
                 ),
                 health
             )
         } catch {
-            if case let SchedulerAdminError.http(status, _) = error,
-               status == 404 || status == 405,
-               let baseURL = URL(string: appState.schedulerAdminBaseURL) {
-                let api = SchedulerAdminAPI(
-                    baseURL: baseURL,
-                    accountId: appState.selectedAdminAccountId,
-                    token: ""
-                )
-                do {
-                    _ = try await api.accounts()
-                    let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
-                    appState.apiCompatibilityMessage = "This Scheduler API is reachable but outdated. Deploy and restart the current server before using iOS patrol features."
-                    return (
-                        ReachabilityResult(
-                            level: .warning,
-                            detail: "API reachable — update required",
-                            roundTripMs: elapsedMs,
-                            checkedAt: Date()
-                        ),
-                        nil
-                    )
-                } catch {
-                    // Fall through to the original health-check error when
-                    // even the legacy account-list endpoint is unavailable.
-                }
-            }
             return (
                 ReachabilityResult(
                     level: .failed,
@@ -238,5 +222,4 @@ struct HostStatusView: View {
         if hours > 0 { return "\(hours)h \(minutes)m" }
         return "\(minutes)m"
     }
-
 }

@@ -2,10 +2,11 @@
 //  PatrolTab.swift
 //  WatchPoint
 //
-//  Home tab: this is where a guard spends nearly all their time during a
-//  shift -- status + Start/Stop, the checkpoint map, and the checkpoint
-//  list. Everything else (WhatsApp session, schedule, preferences) is one
-//  tab away under Account, not competing for space here.
+//  Home tab: primary guard interface during active shifts.
+//  - Live shift status & Start/Stop patrol
+//  - Interactive checkpoint map with radius editing
+//  - Checkpoint list with real-time distance and test arrival trigger
+//  - Message spacing & delivery cooldown countdown
 //
 
 import CoreLocation
@@ -13,17 +14,13 @@ import MapKit
 import SwiftUI
 import UIKit
 
-/// Tracks the fixed reference point a radius drag started from, so each
-/// `.onChanged` can compute an absolute new position (start + cumulative
-/// translation) instead of drifting from incremental deltas.
+/// Tracks the fixed reference point a radius drag started from.
 private struct RadiusDragState {
     let checkpointId: String
     let handleStartScreenPoint: CGPoint
 }
 
-/// Full-screen placement avoids the gesture conflict between a compact Map
-/// embedded in a vertical ScrollView. The map remains freely pannable and the
-/// fixed crosshair makes the selected coordinate unambiguous.
+/// Full-screen placement avoids gesture conflicts with the vertical scroll view.
 private struct CheckpointPlacementView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var position: MapCameraPosition
@@ -65,56 +62,81 @@ private struct CheckpointPlacementView: View {
                             MapScaleView()
                         }
 
+                        // Center Crosshair
                         VStack(spacing: 0) {
                             Spacer()
-                            Image(systemName: "plus")
-                                .font(.headline.weight(.bold))
-                                .foregroundStyle(.white)
-                                .frame(width: 34, height: 34)
-                                .background(.green, in: Circle())
-                                .overlay(Circle().stroke(.white, lineWidth: 3))
-                                .shadow(radius: 3)
+                            ZStack {
+                                Circle()
+                                    .fill(Color.green.opacity(0.2))
+                                    .frame(width: 54, height: 54)
+
+                                Image(systemName: "plus")
+                                    .font(.headline.weight(.bold))
+                                    .foregroundStyle(.white)
+                                    .frame(width: 36, height: 36)
+                                    .background(Color.green.gradient, in: Circle())
+                                    .overlay(Circle().stroke(Color.white, lineWidth: 3))
+                                    .shadow(color: Color.black.opacity(0.2), radius: 4)
+                            }
                             Spacer()
                         }
                         .allowsHitTesting(false)
 
+                        // Bottom Confirmation Action
                         VStack {
                             Spacer()
-                            Button {
-                                let centerPoint = CGPoint(
-                                    x: geometry.size.width / 2,
-                                    y: geometry.size.height / 2
-                                )
-                                guard let coordinate = proxy.convert(centerPoint, from: .local) else { return }
-                                onPlace(coordinate)
-                                dismiss()
-                            } label: {
-                                Label("Place Checkpoint Here", systemImage: "mappin.and.ellipse")
-                                    .frame(maxWidth: .infinity)
+                            VStack(spacing: 8) {
+                                Text("Pan map to align center crosshair")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+
+                                Button {
+                                    let centerPoint = CGPoint(
+                                        x: geometry.size.width / 2,
+                                        y: geometry.size.height / 2
+                                    )
+                                    guard let coordinate = proxy.convert(centerPoint, from: .local) else { return }
+                                    Haptics.notification(.success)
+                                    onPlace(coordinate)
+                                    dismiss()
+                                } label: {
+                                    Label("Place Checkpoint Here", systemImage: "mappin.and.ellipse")
+                                        .fontWeight(.semibold)
+                                        .frame(maxWidth: .infinity)
+                                        .frame(height: 48)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(.green)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                             }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.large)
-                            .padding()
-                            .background(.regularMaterial)
+                            .padding(16)
+                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                            .padding(16)
                         }
                     }
                 }
             }
-            .navigationTitle("Choose Checkpoint Location")
+            .navigationTitle("Choose Location")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel") {
+                        Haptics.impact(.light)
+                        dismiss()
+                    }
                 }
             }
         }
     }
 }
 
+// MARK: - Main Patrol Tab
+
 struct PatrolTab: View {
     @ObservedObject var appState: AppState
     @Environment(\.openURL) private var openURL
     @Binding var selectedTab: AppTab
+
     @State private var mapPosition: MapCameraPosition = .region(
         MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: 43.1394, longitude: -80.2644),
@@ -125,15 +147,13 @@ struct PatrolTab: View {
     @State private var lastAddedCheckpointId: String?
     @State private var radiusDrag: RadiusDragState?
     @State private var showCheckpointPlacement = false
+    @State private var showStopConfirmation = false
 
     var body: some View {
-        patrolContent
-    }
-
-    private var patrolContent: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(spacing: 16) {
+                    // System alerts / banners
                     if let message = appState.apiCompatibilityMessage {
                         apiCompatibilityBanner(message)
                     }
@@ -143,17 +163,48 @@ struct PatrolTab: View {
                     if !isWhatsAppReady {
                         notReadyBanner
                     }
-                    patrolTimingPanel
-                    statusPanel
-                    mapPanel
-                    listPanel
+
+                    // Hero Shift Status & Controls
+                    heroStatusCard
+
+                    // Quick Telemetry Row (GPS, Nearest, Spacing)
+                    telemetryRow
+
+                    // Checkpoint Map
+                    mapCard
+
+                    // Checkpoints List
+                    checkpointsCard
                 }
-                .padding()
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
             }
             .scrollDismissesKeyboard(.interactively)
             .keyboardDoneButton()
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Patrol")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    if appState.shiftIsActive {
+                        HStack(spacing: 6) {
+                            LivePulseIndicator(color: .green, size: 8)
+                            Text("LIVE")
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(.green)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.green.opacity(0.12), in: Capsule())
+                    }
+                }
+            }
+            .refreshable {
+                async let fetchConfig: Void = appState.fetchConfig()
+                async let fetchState: Void = appState.fetchPatrolState()
+                async let fetchStatus: Void = appState.fetchPatrolStatus()
+                _ = await (fetchConfig, fetchState, fetchStatus)
+            }
             .onAppear {
                 appState.requestLocationAccess()
                 appState.refreshGuardReconfirmationRequirement()
@@ -166,11 +217,6 @@ struct PatrolTab: View {
                 appState.stopPatrolStatusUpdates()
             }
             .onChange(of: appState.currentLocation?.coordinate.latitude) { _, _ in
-                // Recenter once, the first time we get a real GPS fix --
-                // otherwise the map stays parked on the hardcoded default
-                // (Waterloo, ON) and "my location" never actually shows up.
-                // CLLocation isn't Equatable, so this keys off latitude
-                // (a Double) as a stand-in for "location changed."
                 guard !hasCenteredOnUser, let location = appState.currentLocation else { return }
                 hasCenteredOnUser = true
                 mapPosition = .region(
@@ -179,6 +225,19 @@ struct PatrolTab: View {
                         span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
                     )
                 )
+            }
+            .confirmationDialog(
+                "Stop Active Patrol?",
+                isPresented: $showStopConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Stop Patrol", role: .destructive) {
+                    Haptics.impact(.medium)
+                    Task { await appState.stopPatrol() }
+                }
+                Button("Continue Patrol", role: .cancel) {}
+            } message: {
+                Text("This will stop automated GPS background tracking and checkpoint arrival message triggers.")
             }
             .fullScreenCover(isPresented: $showCheckpointPlacement) {
                 CheckpointPlacementView(
@@ -209,277 +268,179 @@ struct PatrolTab: View {
         appState.whatsAppState?.status == "ready"
     }
 
-    private func apiCompatibilityBanner(_ message: String) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "server.rack")
-                .foregroundStyle(.orange)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Server Update Required")
-                    .font(.subheadline.weight(.semibold))
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            Button("Details") { selectedTab = .account }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-        }
-        .panel()
-    }
+    // MARK: - Hero Patrol Status Card
 
-    private var guardReconfirmationPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("Confirm Guard", systemImage: "person.crop.circle.badge.questionmark")
-                .font(.headline)
-            Text("Still \(appState.guardDisplayName) on \(appState.selectedAccountName)?")
-                .font(.subheadline)
-            HStack {
-                Button("Yes") { appState.confirmCurrentGuard() }
-                    .buttonStyle(.borderedProminent)
-                Button("Sign Out") {
-                    Task { await appState.signOut() }
+    private var heroStatusCard: some View {
+        VStack(spacing: 16) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        if appState.shiftIsActive {
+                            LivePulseIndicator(color: .green, size: 9)
+                            Text("PATROL ACTIVE")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(.green)
+                        } else {
+                            Circle()
+                                .fill(Color.secondary)
+                                .frame(width: 8, height: 8)
+                            Text("PATROL STANDBY")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Text(appState.shiftIsActive ? "Live GPS Tracking Active" : "Ready for Shift")
+                        .font(.title2.weight(.bold))
+                        .foregroundStyle(.primary)
+
+                    Text(appState.shiftIsActive ? "Detecting arrivals • Sending as \(appState.guardDisplayName)" : "\(appState.checkpoints.count) checkpoints configured")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 }
-                    .buttonStyle(.bordered)
-            }
-        }
-        .panel()
-    }
 
-    /// Surfaces a real gap: without this, a guard could run a whole patrol
-    /// with no indication messages aren't actually going out.
-    private var notReadyBanner: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "exclamationmark.triangle.fill")
+                Spacer()
+
+                ZStack {
+                    Circle()
+                        .fill(appState.shiftIsActive ? Color.green.opacity(0.15) : Color(.tertiarySystemGroupedBackground))
+                        .frame(width: 52, height: 52)
+                    Image(systemName: appState.shiftIsActive ? "location.fill" : "location.slash")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(appState.shiftIsActive ? .green : .secondary)
+                }
+            }
+
+            // Start / Stop Primary Action Button
+            Button {
+                Haptics.impact(.medium)
+                if appState.shiftIsActive {
+                    showStopConfirmation = true
+                } else {
+                    Task { await appState.startPatrol() }
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: appState.shiftIsActive ? "stop.fill" : "play.fill")
+                        .font(.headline)
+                    Text(appState.shiftIsActive ? "End Patrol Shift" : "Start Live Patrol")
+                        .fontWeight(.bold)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 50)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(appState.shiftIsActive ? .red : .green)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .disabled(appState.checkpoints.isEmpty && !appState.shiftIsActive)
+
+            if appState.checkpoints.isEmpty && !appState.shiftIsActive {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.circle.fill")
+                    Text("Add at least one checkpoint below before starting patrol.")
+                }
+                .font(.caption.weight(.medium))
                 .foregroundStyle(.orange)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("WhatsApp isn't connected")
-                    .font(.subheadline.weight(.semibold))
-                Text("Checkpoint arrivals won't send a message until this is fixed.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
-            Spacer()
-            Button("Fix") { selectedTab = .account }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
         }
-        .panel()
+        .padding(18)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(appState.shiftIsActive ? Color.green.opacity(0.4) : Color(.separator).opacity(0.3), lineWidth: appState.shiftIsActive ? 1.5 : 0.8)
+        )
+        .shadow(color: appState.shiftIsActive ? Color.green.opacity(0.08) : Color.black.opacity(0.03), radius: 8, x: 0, y: 3)
     }
 
-    private var patrolTimingPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("Message Spacing", systemImage: "timer")
-                .font(.headline)
-            Text("This is the wait after the last WhatsApp send before another message is allowed, so WhatsApp does not treat the account like bulk sending.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+    // MARK: - Telemetry Summary Row
 
-            HStack {
-                Text("Minimum interval")
-                    .font(.subheadline)
+    private var telemetryRow: some View {
+        HStack(spacing: 10) {
+            // GPS Signal Quality
+            VStack(alignment: .leading, spacing: 3) {
+                Text("GPS Accuracy")
+                    .font(.caption2.weight(.medium))
                     .foregroundStyle(.secondary)
-                Spacer()
-                Text(minIntervalMinutes == 0 ? "No extra wait" : "\(minIntervalMinutes) min between sends")
-                    .font(.subheadline.weight(.semibold))
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(gpsStatusColor)
+                        .frame(width: 7, height: 7)
+                    Text(gpsStatusText)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(gpsStatusColor)
+                }
             }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color(.separator).opacity(0.2), lineWidth: 0.8))
 
-            HStack {
-                Text("Same-checkpoint cooldown")
-                    .font(.subheadline)
+            // Nearest Checkpoint
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Nearest Point")
+                    .font(.caption2.weight(.medium))
                     .foregroundStyle(.secondary)
-                Spacer()
-                Text("\(Int(checkpointCooldownMinutes)) min")
-                    .font(.subheadline.weight(.semibold))
+                if let nearest = appState.nearestCheckpoint {
+                    Text("\(nearest.checkpoint.name) (\(Int(nearest.distance))m)")
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                } else {
+                    Text("No points")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.tertiary)
+                }
             }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color(.separator).opacity(0.2), lineWidth: 0.8))
 
-            HStack {
-                Text("Next allowed send")
-                    .font(.subheadline)
+            // Delivery Spacing
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Next Send")
+                    .font(.caption2.weight(.medium))
                     .foregroundStyle(.secondary)
-                Spacer()
                 if minutesUntilNextSend <= 0 {
-                    Text("Ready now")
-                        .font(.subheadline.weight(.semibold))
+                    Text("Ready Now")
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(.green)
                 } else {
                     Text(formatCountdown(minutesUntilNextSend))
-                        .font(.system(.title3, design: .monospaced).weight(.semibold))
+                        .font(.caption.weight(.bold))
                         .foregroundStyle(.orange)
                 }
             }
-
-            if minutesUntilNextSend <= 0 {
-                HStack(spacing: 8) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                    Text("You can send a patrol message now.")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.green)
-                }
-                .padding(10)
-                .frame(maxWidth: .infinity)
-                .background(.green.opacity(0.15))
-                .cornerRadius(8)
-            }
-
-            if let lastSendLabel, let lastSendAt {
-                Divider()
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Last successful send")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text(lastSendLabel)
-                            .font(.subheadline.weight(.semibold))
-                    }
-                    Spacer()
-                    Text(lastSendAt.formatted(date: .omitted, time: .shortened))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Text("Minimum interval covers every outgoing message. Same-checkpoint cooldown only blocks repeating the same checkpoint too soon. Change both under Account → Message Spacing.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color(.separator).opacity(0.2), lineWidth: 0.8))
         }
-        .panel()
     }
 
-    private var minIntervalMinutes: Int {
-        appState.patrolStatus?.minMessageIntervalMinutes
-            ?? appState.patrolConfig?.delivery?.minMessageIntervalMinutes
-            ?? 0
+    private var gpsStatusColor: Color {
+        guard let location = appState.currentLocation else { return .secondary }
+        if location.horizontalAccuracy <= 20 { return .green }
+        if location.horizontalAccuracy <= appState.accuracyThresholdMeters { return .orange }
+        return .red
     }
 
-    private var checkpointCooldownMinutes: Double {
-        appState.patrolStatus?.checkpointCooldownMinutes
-            ?? appState.checkpointCooldownMinutes
+    private var gpsStatusText: String {
+        guard let location = appState.currentLocation else { return "Searching…" }
+        return "\(Int(location.horizontalAccuracy)) m"
     }
 
-    private var lastSendAt: Date? {
-        if let iso = appState.patrolStatus?.lastSuccessfulSend?.attemptedAt,
-           let date = parseISODate(iso) {
-            return date
-        }
-        return appState.history
-            .filter { $0.status == .schedulerSucceeded }
-            .map(\.timestamp)
-            .max()
-    }
+    // MARK: - Map Card
 
-    private var lastSendLabel: String? {
-        if let name = appState.patrolStatus?.lastSuccessfulSend?.chatName, !name.isEmpty {
-            return name
-        }
-        return lastSendAt == nil ? nil : "WhatsApp"
-    }
-
-    private var minutesUntilNextSend: Double {
-        if let status = appState.patrolStatus, status.minMessageIntervalMinutes > 0 {
-            return status.minutesUntilAvailable
-        }
-        guard minIntervalMinutes > 0, let lastSendAt else { return 0 }
-        let remaining = (Double(minIntervalMinutes) * 60) - Date().timeIntervalSince(lastSendAt)
-        return max(0, remaining / 60)
-    }
-
-    private func parseISODate(_ value: String) -> Date? {
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractional.date(from: value) { return date }
-        let standard = ISO8601DateFormatter()
-        standard.formatOptions = [.withInternetDateTime]
-        return standard.date(from: value)
-    }
-
-    private func formatCountdown(_ minutes: Double) -> String {
-        if minutes < 1 { return "< 1 min" }
-        if minutes < 60 { return "\(Int(ceil(minutes))) min" }
-        let hours = Int(minutes / 60)
-        let mins = Int(minutes.truncatingRemainder(dividingBy: 60))
-        return "\(hours)h \(mins)m"
-    }
-
-    private var statusPanel: some View {
-        VStack(alignment: .leading, spacing: 14) {
+    private var mapCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(appState.shiftIsActive ? "Patrol Active" : "Patrol Stopped")
-                        .font(.title2.weight(.semibold))
-                    if let account = appState.whatsAppState?.account {
-                        Text("Sending as \(account.name)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Text(appState.shiftIsActive ? "Detecting checkpoint arrivals." : "Mark checkpoints below, then start.")
-                        .foregroundStyle(.secondary)
-                }
+                Label("Checkpoint Map", systemImage: "map.fill")
+                    .font(.headline)
                 Spacer()
-                Image(systemName: appState.shiftIsActive ? "location.fill" : "location.slash")
-                    .font(.title)
-                    .foregroundStyle(appState.shiftIsActive ? .green : .secondary)
+                Text("\(appState.checkpoints.count) Active")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
             }
-
-            LabeledContent("Location Access", value: authorizationLabel(appState.locationAuthorization))
-            if appState.shiftIsActive {
-                Label(
-                    "Background patrol is active. You can lock or minimize the app.",
-                    systemImage: "lock.open.display"
-                )
-                .font(.caption)
-                .foregroundStyle(.green)
-            }
-            if appState.locationAuthorization == .denied {
-                Button {
-                    guard let settingsURL = URL(string: UIApplication.openSettingsURLString) else { return }
-                    openURL(settingsURL)
-                } label: {
-                    Label("Open Location Settings", systemImage: "gear")
-                }
-            }
-            if let location = appState.currentLocation {
-                LabeledContent("GPS Accuracy", value: "\(Int(location.horizontalAccuracy)) m")
-            }
-            if let nearest = appState.nearestCheckpoint {
-                LabeledContent("Nearest", value: nearest.checkpoint.name)
-                LabeledContent("Distance", value: "\(Int(nearest.distance)) m")
-            }
-
-            Button {
-                Task {
-                    if appState.shiftIsActive {
-                        await appState.stopPatrol()
-                    } else {
-                        await appState.startPatrol()
-                    }
-                }
-            } label: {
-                Label(appState.shiftIsActive ? "Stop Patrol" : "Start Live Patrol", systemImage: appState.shiftIsActive ? "stop.fill" : "play.fill")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .tint(appState.shiftIsActive ? .red : .green)
-            .disabled(appState.checkpoints.isEmpty)
-
-            if appState.checkpoints.isEmpty {
-                Label("Add at least one checkpoint below before starting.", systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
-        }
-        .panel()
-    }
-
-    private var mapPanel: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label("Checkpoints", systemImage: "map")
-                .font(.headline)
-            Text("Choose Add Anywhere, move the map under the crosshair, then place the checkpoint. Drag the white handle on its circle to resize the radius.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
 
             MapReader { proxy in
                 Map(position: $mapPosition) {
@@ -489,7 +450,7 @@ struct PatrolTab: View {
                         Marker(checkpoint.name, coordinate: center)
                             .tint(.green)
                         MapCircle(center: center, radius: checkpoint.radiusMeters)
-                            .foregroundStyle(.green.opacity(0.18))
+                            .foregroundStyle(.green.opacity(0.16))
                             .stroke(.green, lineWidth: 2)
                         Annotation("", coordinate: radiusHandleCoordinate(for: checkpoint)) {
                             radiusHandle(for: checkpoint, proxy: proxy)
@@ -501,125 +462,204 @@ struct PatrolTab: View {
                     MapCompass()
                 }
             }
-            .frame(height: 260)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .frame(height: 250)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color(.separator).opacity(0.3), lineWidth: 0.8)
+            )
 
-            Button {
-                showCheckpointPlacement = true
-            } label: {
-                Label(
-                    "Add Checkpoint Anywhere",
-                    systemImage: "mappin.and.ellipse"
-                )
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
+            // Add Checkpoint Action Buttons
+            HStack(spacing: 10) {
+                Button {
+                    Haptics.impact(.medium)
+                    showCheckpointPlacement = true
+                } label: {
+                    Label("Add Anywhere", systemImage: "mappin.and.ellipse")
+                        .fontWeight(.semibold)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 42)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-            Button {
-                Task { lastAddedCheckpointId = await appState.addCheckpoint() }
-            } label: {
-                Label("Drop At My Location", systemImage: "location")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .disabled(appState.currentLocation == nil)
-
-            if appState.currentLocation == nil {
-                Label(waitingForLocationMessage, systemImage: "location.slash")
-                    .font(.caption)
-                    .foregroundStyle(waitingForLocationMessage.contains("Settings") ? .orange : .secondary)
+                Button {
+                    Haptics.impact(.medium)
+                    Task {
+                        let newId = await appState.addCheckpoint()
+                        if newId != nil {
+                            Haptics.notification(.success)
+                            lastAddedCheckpointId = newId
+                        }
+                    }
+                } label: {
+                    Label("Drop at GPS", systemImage: "location.fill")
+                        .fontWeight(.medium)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 42)
+                }
+                .buttonStyle(.bordered)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .disabled(appState.currentLocation == nil)
             }
 
             radiusQuickEditor
         }
-        .panel()
+        .padding(16)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color(.separator).opacity(0.3), lineWidth: 0.8)
+        )
+        .shadow(color: Color.black.opacity(0.02), radius: 6, x: 0, y: 2)
     }
 
-    /// A radius control right next to the map for whichever checkpoint was
-    /// just placed, so adjusting it doesn't require scrolling down to the
-    /// list -- and its live-updating MapCircle above makes the radius
-    /// change visible immediately.
     @ViewBuilder
     private var radiusQuickEditor: some View {
         if let index = appState.checkpoints.firstIndex(where: { $0.id == lastAddedCheckpointId }) {
             let checkpoint = appState.checkpoints[index]
             VStack(alignment: .leading, spacing: 6) {
-                Text("Radius for \"\(checkpoint.name)\"")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 HStack {
-                    Slider(
-                        value: Binding(
-                            get: { appState.checkpoints[index].radiusMeters },
-                            set: { appState.checkpoints[index].radiusMeters = $0 }
-                        ),
-                        in: 10...1000,
-                        step: 10
-                    )
+                    Text("Radius for \"\(checkpoint.name)\"")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    Spacer()
                     Text("\(Int(checkpoint.radiusMeters)) m")
-                        .font(.subheadline.monospacedDigit())
-                        .frame(width: 60, alignment: .trailing)
+                        .font(.subheadline.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(.green)
                 }
+                Slider(
+                    value: Binding(
+                        get: { appState.checkpoints[index].radiusMeters },
+                        set: { appState.checkpoints[index].radiusMeters = $0 }
+                    ),
+                    in: 10...1000,
+                    step: 10
+                )
+                .tint(.green)
             }
+            .padding(10)
+            .background(Color(.tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
     }
 
-    private var listPanel: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if appState.checkpoints.isEmpty {
-                Text("No checkpoints yet — tap the map above.")
+    // MARK: - Checkpoints List Card
+
+    private var checkpointsCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Label("Checkpoints List", systemImage: "list.bullet.circle.fill")
+                    .font(.headline)
+                Spacer()
+                Text("\(appState.checkpoints.count)")
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
+            }
+
+            if appState.checkpoints.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "mappin.slash")
+                        .font(.system(size: 32))
+                        .foregroundStyle(.tertiary)
+                    Text("No checkpoints placed yet.\nTap 'Add Anywhere' or 'Drop at GPS' above.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 24)
             } else {
-                // Bind by stable checkpoint identity. Enumerated/indexed
-                // bindings can become invalid in the same render pass when
-                // deletion shrinks the array, causing hangs or crashes.
                 ForEach($appState.checkpoints) { $checkpoint in
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            TextField("Name", text: $checkpoint.name)
-                                .font(.subheadline.weight(.semibold))
-                            Spacer()
-                            Button(role: .destructive) {
-                                lastAddedCheckpointId = lastAddedCheckpointId == checkpoint.id ? nil : lastAddedCheckpointId
-                                Task { await appState.deleteCheckpoint(checkpoint) }
-                            } label: {
-                                if appState.deletingCheckpointIds.contains(checkpoint.id) {
-                                    ProgressView()
-                                } else {
-                                    Image(systemName: "trash")
-                                }
-                            }
-                            .disabled(appState.deletingCheckpointIds.contains(checkpoint.id))
-                        }
-                        Stepper(
-                            "Radius \(Int(checkpoint.radiusMeters)) m",
-                            value: $checkpoint.radiusMeters,
-                            in: 10...1000,
-                            step: 10
-                        )
-                        .disabled(appState.deletingCheckpointIds.contains(checkpoint.id))
-                        Button {
-                            Task { await appState.manualTrigger(checkpoint) }
-                        } label: {
-                            Label("Send Test Arrival", systemImage: "paperplane")
-                                .font(.caption)
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(appState.deletingCheckpointIds.contains(checkpoint.id))
-                    }
-                    .padding(.vertical, 6)
+                    checkpointRow(checkpoint: $checkpoint)
+
                     if checkpoint.id != appState.checkpoints.last?.id {
                         Divider()
                     }
                 }
             }
         }
-        .panel()
+        .padding(16)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color(.separator).opacity(0.3), lineWidth: 0.8)
+        )
+        .shadow(color: Color.black.opacity(0.02), radius: 6, x: 0, y: 2)
     }
 
-    /// A point due east of the checkpoint at distance `radiusMeters` --
-    /// where the draggable resize handle sits on the circle's edge. Flat
-    /// approximation (fine at the radii this app supports, max 1000m).
+    private func checkpointRow(checkpoint: Binding<Checkpoint>) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                TextField("Checkpoint Name", text: checkpoint.name)
+                    .font(.subheadline.weight(.semibold))
+                    .padding(8)
+                    .background(Color(.tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 8))
+
+                Spacer()
+
+                Button(role: .destructive) {
+                    Haptics.impact(.medium)
+                    lastAddedCheckpointId = lastAddedCheckpointId == checkpoint.wrappedValue.id ? nil : lastAddedCheckpointId
+                    Task { await appState.deleteCheckpoint(checkpoint.wrappedValue) }
+                } label: {
+                    if appState.deletingCheckpointIds.contains(checkpoint.wrappedValue.id) {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "trash")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.red)
+                            .padding(8)
+                            .background(Color.red.opacity(0.1), in: Circle())
+                    }
+                }
+                .disabled(appState.deletingCheckpointIds.contains(checkpoint.wrappedValue.id))
+            }
+
+            // Radius Stepper and Distance Info
+            HStack {
+                Stepper(
+                    "Radius: \(Int(checkpoint.wrappedValue.radiusMeters)) m",
+                    value: checkpoint.radiusMeters,
+                    in: 10...1000,
+                    step: 10
+                )
+                .font(.footnote)
+            }
+
+            // Manual Send Test Arrival Action
+            HStack {
+                if let userLoc = appState.currentLocation {
+                    let cpLoc = CLLocation(latitude: checkpoint.wrappedValue.latitude, longitude: checkpoint.wrappedValue.longitude)
+                    let dist = userLoc.distance(from: cpLoc)
+                    Label("\(Int(dist))m away", systemImage: "arrow.up.right")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button {
+                    Haptics.impact(.medium)
+                    Task {
+                        await appState.manualTrigger(checkpoint.wrappedValue)
+                        Haptics.notification(.success)
+                    }
+                } label: {
+                    Label("Send Test Arrival", systemImage: "paperplane.fill")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
+                .tint(.green)
+                .controlSize(.small)
+                .disabled(appState.deletingCheckpointIds.contains(checkpoint.wrappedValue.id))
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    // MARK: - Radius Handle Calculation & View
+
     private func radiusHandleCoordinate(for checkpoint: Checkpoint) -> CLLocationCoordinate2D {
         let metersPerDegreeLatitude = 111_320.0
         let metersPerDegreeLongitude = max(metersPerDegreeLatitude * cos(checkpoint.latitude * .pi / 180), 1)
@@ -627,18 +667,12 @@ struct PatrolTab: View {
         return CLLocationCoordinate2D(latitude: checkpoint.latitude, longitude: checkpoint.longitude + deltaLongitude)
     }
 
-    /// Draggable handle on a checkpoint's circle edge. Dragging moves the
-    /// handle; the new radius is the distance from the checkpoint's center
-    /// to wherever the handle's screen position lands, converted back to a
-    /// coordinate via the map's own projection (MapProxy) rather than a
-    /// manual points-per-meter estimate, so it stays correct at any zoom
-    /// level.
     private func radiusHandle(for checkpoint: Checkpoint, proxy: MapProxy) -> some View {
         Circle()
-            .fill(.white)
-            .overlay(Circle().stroke(Color.green, lineWidth: 2))
-            .frame(width: 22, height: 22)
-            .shadow(radius: 2)
+            .fill(Color.white)
+            .overlay(Circle().stroke(Color.green, lineWidth: 2.5))
+            .frame(width: 24, height: 24)
+            .shadow(color: Color.black.opacity(0.18), radius: 3)
             .contentShape(Circle())
             .gesture(
                 DragGesture(minimumDistance: 0, coordinateSpace: .local)
@@ -662,30 +696,102 @@ struct PatrolTab: View {
                     }
                     .onEnded { _ in
                         radiusDrag = nil
+                        Haptics.impact(.light)
                         Task { await appState.saveCheckpoints() }
                     }
             )
     }
 
-    private func authorizationLabel(_ status: CLAuthorizationStatus) -> String {
-        switch status {
-        case .notDetermined: return "Not requested"
-        case .restricted: return "Restricted"
-        case .denied: return "Denied"
-        case .authorizedAlways: return "Always"
-        case .authorizedWhenInUse: return "When in use"
-        @unknown default: return "Unknown"
+    // MARK: - Banners
+
+    private func apiCompatibilityBanner(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "server.rack")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Server Update Required")
+                    .font(.subheadline.weight(.semibold))
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Details") { selectedTab = .account }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
         }
+        .panel()
     }
 
-    private var waitingForLocationMessage: String {
-        switch appState.locationAuthorization {
-        case .denied, .restricted:
-            return "Location access is off for WatchPoint. Turn it on in Settings > Privacy > Location Services > WatchPoint to place checkpoints."
-        case .notDetermined:
-            return "Tap \"Drop At My Location\" or reopen this tab to allow location access -- iOS should prompt you."
-        default:
-            return "Finding your location… this can take a few seconds outdoors, longer indoors."
+    private var guardReconfirmationPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Confirm Guard Identity", systemImage: "person.crop.circle.badge.questionmark")
+                .font(.headline)
+            Text("Still active as \(appState.guardDisplayName) on \(appState.selectedAccountName)?")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            HStack {
+                Button("Yes, Confirm") {
+                    Haptics.impact(.light)
+                    appState.confirmCurrentGuard()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+
+                Button("Sign Out") {
+                    Haptics.impact(.medium)
+                    Task { await appState.signOut() }
+                }
+                .buttonStyle(.bordered)
+            }
         }
+        .panel()
+    }
+
+    private var notReadyBanner: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("WhatsApp Disconnected")
+                    .font(.subheadline.weight(.semibold))
+                Text("Arrival messages won't send until WhatsApp is re-linked.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Fix") { selectedTab = .account }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+        }
+        .panel()
+    }
+
+    // MARK: - Helpers
+
+    private var minIntervalMinutes: Int {
+        appState.patrolStatus?.minMessageIntervalMinutes
+            ?? appState.patrolConfig?.delivery?.minMessageIntervalMinutes
+            ?? 0
+    }
+
+    private var minutesUntilNextSend: Double {
+        if let status = appState.patrolStatus, status.minMessageIntervalMinutes > 0 {
+            return status.minutesUntilAvailable
+        }
+        guard minIntervalMinutes > 0, let lastSendAt = appState.history
+            .filter({ $0.status == .schedulerSucceeded })
+            .map(\.timestamp)
+            .max() else { return 0 }
+        let remaining = (Double(minIntervalMinutes) * 60) - Date().timeIntervalSince(lastSendAt)
+        return max(0, remaining / 60)
+    }
+
+    private func formatCountdown(_ minutes: Double) -> String {
+        if minutes < 1 { return "< 1 min" }
+        if minutes < 60 { return "\(Int(ceil(minutes)))m" }
+        let hours = Int(minutes / 60)
+        let mins = Int(minutes.truncatingRemainder(dividingBy: 60))
+        return "\(hours)h \(mins)m"
     }
 }

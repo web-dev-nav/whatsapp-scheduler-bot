@@ -2,8 +2,8 @@
 //  AccountTab.swift
 //  WatchPoint
 //
-//  Hub for rare config: WhatsApp session, message spacing, GPS accuracy,
-//  automatic/patrol messages, and device privacy.
+//  Hub for guard profile, WhatsApp session management, message spacing,
+//  GPS accuracy, automatic/patrol messages, and device security.
 //
 
 import SwiftUI
@@ -17,95 +17,243 @@ struct AccountTab: View {
     var body: some View {
         NavigationStack {
             List {
+                // Guard Profile & Session Status Section
                 Section {
-                    VStack(alignment: .leading, spacing: 12) {
-                        WhatsAppConnectionRow(state: appState.whatsAppState)
-                        TextField("Guard name", text: $appState.guardName)
-                            .textInputAutocapitalization(.words)
-                            .onSubmit { Task { _ = await appState.savePatrolState() } }
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack(spacing: 14) {
+                            ZStack {
+                                Circle()
+                                    .fill(Color.green.gradient)
+                                    .frame(width: 48, height: 48)
+                                Text(guardInitials)
+                                    .font(.headline.weight(.bold))
+                                    .foregroundStyle(.white)
+                            }
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(appState.guardDisplayName)
+                                    .font(.headline.weight(.semibold))
+                                Text("Account: \(appState.selectedAccountName)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Spacer()
+
+                            WhatsAppStatusBadge(state: appState.whatsAppState)
+                        }
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Guard Identity Name")
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(.secondary)
+                            TextField("Guard name", text: $appState.guardName)
+                                .textInputAutocapitalization(.words)
+                                .padding(8)
+                                .background(Color(.tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 8))
+                                .onSubmit {
+                                    Haptics.impact(.light)
+                                    Task { _ = await appState.savePatrolState() }
+                                }
+                        }
                     }
+                    .padding(.vertical, 4)
 
                     Button {
+                        Haptics.impact(.light)
                         showWhatsAppSession = true
                     } label: {
-                        Label("Configure WhatsApp", systemImage: "qrcode")
+                        HStack(spacing: 12) {
+                            SettingsIconBadge(systemName: "qrcode", backgroundColor: .green)
+                            Text("Manage WhatsApp Session")
+                                .foregroundStyle(.primary)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
                     }
 
                     Button(role: .destructive) {
+                        Haptics.impact(.medium)
                         Task { await appState.signOut() }
                     } label: {
-                        Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.left")
+                        HStack(spacing: 12) {
+                            SettingsIconBadge(systemName: "rectangle.portrait.and.arrow.left", backgroundColor: .red)
+                            Text("Sign Out Guard")
+                                .foregroundStyle(.red)
+                        }
                     }
                 } header: {
-                    Text("This Guard")
+                    Text("Active Guard Profile")
                 } footer: {
-                    Text("Each guard account has its own WhatsApp session and patrol history. Sign Out returns to the login screen.")
+                    Text("Each guard account maintains its own independent WhatsApp session, checkpoints, and patrol event history.")
                 }
 
+                // Security & Privacy
                 Section {
-                    Toggle(
-                        "Require Face ID or Passcode",
-                        isOn: Binding(
-                            get: { appState.appLockEnabled },
-                            set: { appState.setAppLockEnabled($0) }
+                    Toggle(isOn: Binding(
+                        get: { appState.appLockEnabled },
+                        set: {
+                            Haptics.impact(.light)
+                            appState.setAppLockEnabled($0)
+                        }
+                    )) {
+                        HStack(spacing: 12) {
+                            SettingsIconBadge(systemName: "faceid", backgroundColor: .blue)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Require Face ID / Passcode")
+                                Text("Lock app when leaving or returning")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Security & Privacy")
+                }
+
+                // GPS Location Accuracy
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 12) {
+                            SettingsIconBadge(systemName: "location.fill", backgroundColor: .teal)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("GPS Accuracy Threshold")
+                                Text("Max error allowed before sending: \(Int(appState.accuracyThresholdMeters)) m")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+
+                        Slider(
+                            value: $appState.accuracyThresholdMeters,
+                            in: 10...100,
+                            step: 5
                         )
-                    )
+                        .tint(.teal)
+                    }
+                    .padding(.vertical, 4)
                 } header: {
-                    Text("Privacy")
+                    Text("Location Precision")
                 } footer: {
-                    Text("Locks WatchPoint at launch and whenever the app returns from the background.")
+                    Text("Max accuracy is the largest GPS radius WatchPoint accepts. A tighter value (smaller meters) prevents false arrivals from weak indoor GPS.")
                 }
 
+                // Message Spacing Safeguards
                 Section {
-                    Stepper(
-                        "GPS must be within \(Int(appState.accuracyThresholdMeters)) m",
-                        value: $appState.accuracyThresholdMeters,
-                        in: 10...100,
-                        step: 5
-                    )
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 12) {
+                            SettingsIconBadge(systemName: "timer", backgroundColor: .orange)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Minimum Message Interval")
+                                Text(intervalLabel)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        Stepper("", value: $minMessageInterval, in: 0...240, step: 5)
+                            .labelsHidden()
+                    }
+                    .padding(.vertical, 2)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 12) {
+                            SettingsIconBadge(systemName: "arrow.counterclockwise.circle.fill", backgroundColor: .indigo)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Same-Checkpoint Cooldown")
+                                Text(cooldownLabel)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        Stepper("", value: $appState.checkpointCooldownMinutes, in: 5...120, step: 5)
+                            .labelsHidden()
+                    }
+                    .padding(.vertical, 2)
                 } header: {
-                    Text("Location Accuracy")
+                    Text("Message Spacing Safeguards")
                 } footer: {
-                    Text("Max accuracy is the largest GPS error WatchPoint will accept before sending. A tighter value (smaller meters) ignores fuzzy indoor fixes so a checkpoint is not marked from too far away.")
+                    Text("Minimum interval prevents back-to-back WhatsApp messages so account traffic remains natural. Same-checkpoint cooldown prevents re-triggering the same checkpoint repeatedly.")
                 }
 
-                Section {
-                    Stepper(intervalLabel, value: $minMessageInterval, in: 0...240, step: 5)
-                    Stepper(
-                        cooldownLabel,
-                        value: $appState.checkpointCooldownMinutes,
-                        in: 5...120,
-                        step: 5
-                    )
-                } header: {
-                    Text("Message Spacing")
-                } footer: {
-                    Text("Minimum interval is the wait after any WhatsApp send (patrol or scheduled) before another send is allowed. That gap is what keeps WhatsApp from treating the account like a bulk-messaging service.\n\nSame-checkpoint cooldown is separate: after a guard is messaged at one checkpoint, that same spot will not send again until this many minutes have passed. You can set it from 5 minutes up to 2 hours.")
-                }
-
-                Section("Messages") {
-                    NavigationLink("Shared Destination Chat") {
+                // Message Templates & Destination
+                Section("Message Templates & Routing") {
+                    NavigationLink {
                         DeliverySettingsView(appState: appState)
+                    } label: {
+                        HStack(spacing: 12) {
+                            SettingsIconBadge(systemName: "bubble.left.and.bubble.right.fill", backgroundColor: .green)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Shared Destination Chat")
+                                Text(appState.patrolConfig?.groupName.isEmpty == false ? appState.patrolConfig!.groupName : "Not configured")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                     }
-                    NavigationLink("Automatic Message & Schedule") {
+
+                    NavigationLink {
                         SetupView(appState: appState)
+                    } label: {
+                        HStack(spacing: 12) {
+                            SettingsIconBadge(systemName: "calendar.badge.clock", backgroundColor: .blue)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Automatic Message & Schedule")
+                                Text("Timed routine shifts")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                     }
-                    NavigationLink("Patrol Arrival Message") {
+
+                    NavigationLink {
                         PatrolMessageView(appState: appState)
+                    } label: {
+                        HStack(spacing: 12) {
+                            SettingsIconBadge(systemName: "figure.walk", backgroundColor: .purple)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Patrol Arrival Message")
+                                Text("GPS checkpoint text template")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                     }
                 }
 
+                // Server Diagnostics
                 Section {
-                    TextField("Admin base URL", text: $appState.schedulerAdminBaseURL)
-                        .keyboardType(.URL)
-                        .textInputAutocapitalization(.never)
-                    NavigationLink("Test Server Connection") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Admin Engine Base URL")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        TextField("Admin base URL", text: $appState.schedulerAdminBaseURL)
+                            .keyboardType(.URL)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .padding(8)
+                            .background(Color(.tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 8))
+                    }
+                    .padding(.vertical, 2)
+
+                    NavigationLink {
                         HostStatusView(appState: appState)
+                    } label: {
+                        HStack(spacing: 12) {
+                            SettingsIconBadge(systemName: "network", backgroundColor: .gray)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Test Server Connection")
+                                Text("Ping latency, TLS & engine health")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                     }
                 } header: {
-                    Text("Server")
+                    Text("Server Connection")
                 } footer: {
-                    Text("Test Server Connection pings this URL and shows round-trip time, versions, and whether the engine is reachable.")
+                    Text("WatchPoint connects securely to the Scheduler Engine over Tailscale HTTPS.")
                 }
             }
             .navigationTitle("Account")
@@ -133,10 +281,22 @@ struct AccountTab: View {
         }
     }
 
+    private var guardInitials: String {
+        let name = appState.guardDisplayName
+        let parts = name.split(separator: " ")
+        if let first = parts.first?.first {
+            if parts.count > 1, let second = parts.last?.first {
+                return "\(first)\(second)".uppercased()
+            }
+            return "\(first)".uppercased()
+        }
+        return "G"
+    }
+
     private var intervalLabel: String {
         minMessageInterval == 0
-            ? "Minimum interval: no extra wait"
-            : "Minimum interval: \(minMessageInterval) min between any two sends"
+            ? "No extra wait between sends"
+            : "\(minMessageInterval) min gap between any two sends"
     }
 
     private var cooldownLabel: String {
@@ -145,11 +305,11 @@ struct AccountTab: View {
             let hours = minutes / 60
             let remainder = minutes % 60
             if remainder == 0 {
-                return "Same-checkpoint cooldown \(hours) hr"
+                return "\(hours) hr cooldown on same spot"
             }
-            return "Same-checkpoint cooldown \(hours) hr \(remainder) min"
+            return "\(hours)h \(remainder)m cooldown on same spot"
         }
-        return "Same-checkpoint cooldown \(minutes) min"
+        return "\(minutes) min cooldown on same spot"
     }
 
     private func loadIntervalIfNeeded() {
@@ -169,6 +329,47 @@ struct AccountTab: View {
     }
 }
 
+// MARK: - Subviews & WhatsApp Status Badge
+
+private struct WhatsAppStatusBadge: View {
+    let state: WhatsAppAdminState?
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(statusColor)
+                .frame(width: 8, height: 8)
+            Text(statusLabel)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(statusColor)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(statusColor.opacity(0.12), in: Capsule())
+    }
+
+    private var statusColor: Color {
+        switch state?.status {
+        case "ready": return .green
+        case "qr", "authenticated", "starting": return .orange
+        default: return .red
+        }
+    }
+
+    private var statusLabel: String {
+        guard let state else { return "Offline" }
+        switch state.status {
+        case "ready": return "Ready"
+        case "qr": return "Scan QR"
+        case "authenticated": return "Linked"
+        case "starting": return "Starting"
+        default: return state.status.capitalized
+        }
+    }
+}
+
+// MARK: - WhatsApp Session Manager View
+
 struct WhatsAppSessionView: View {
     @ObservedObject var appState: AppState
     @Environment(\.openURL) private var openURL
@@ -178,7 +379,9 @@ struct WhatsAppSessionView: View {
     var body: some View {
         List {
             currentSessionSection
+
             WhatsAppPairingCard(appState: appState)
+
             if let url = appState.pairingPageURL, appState.whatsAppState?.status != "ready" {
                 Section {
                     ShareLink(item: url) {
@@ -186,18 +389,20 @@ struct WhatsAppSessionView: View {
                     }
                     Button {
                         appState.skipAppLockOnce = true
+                        Haptics.impact(.light)
                         openURL(url)
                     } label: {
-                        Label("Open QR in Browser", systemImage: "safari")
+                        Label("Open QR in Safari", systemImage: "safari")
                     }
                 }
             }
+
             if !appState.adminToken.isEmpty {
                 sessionActionsSection
                 accountRemovalSection
             }
         }
-        .navigationTitle("WhatsApp")
+        .navigationTitle("WhatsApp Session")
         .navigationBarTitleDisplayMode(.inline)
         .confirmationDialog(
             "Remove \(appState.selectedAccountName)?",
@@ -205,11 +410,12 @@ struct WhatsAppSessionView: View {
             titleVisibility: .visible
         ) {
             Button("Remove Account and Data", role: .destructive) {
+                Haptics.impact(.medium)
                 Task { await appState.deleteSelectedAccount() }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This permanently deletes this guard's WhatsApp session, schedule, checkpoints, and patrol history from the server. This can't be undone.")
+            Text("This permanently deletes this guard's WhatsApp session, schedule, checkpoints, and patrol history from the server. This cannot be undone.")
         }
         .confirmationDialog(
             "Log out of WhatsApp?",
@@ -217,6 +423,7 @@ struct WhatsAppSessionView: View {
             titleVisibility: .visible
         ) {
             Button("Log Out WhatsApp", role: .destructive) {
+                Haptics.impact(.medium)
                 Task { await appState.logoutWhatsApp() }
             }
             Button("Cancel", role: .cancel) {}
@@ -241,19 +448,25 @@ struct WhatsAppSessionView: View {
         Section {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 14) {
-                    Image(systemName: sessionIcon)
-                        .font(.title2)
-                        .foregroundStyle(sessionColor)
-                        .frame(width: 42, height: 42)
-                        .background(sessionColor.opacity(0.12), in: Circle())
-                    VStack(alignment: .leading, spacing: 3) {
+                    ZStack {
+                        Circle()
+                            .fill(sessionColor.opacity(0.12))
+                            .frame(width: 44, height: 44)
+                        Image(systemName: sessionIcon)
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(sessionColor)
+                    }
+
+                    VStack(alignment: .leading, spacing: 2) {
                         Text(appState.selectedAccountName)
-                            .font(.headline)
+                            .font(.headline.weight(.semibold))
                         Text(sessionStatusTitle)
                             .font(.subheadline)
                             .foregroundStyle(sessionColor)
                     }
+
                     Spacer()
+
                     if appState.isAdminLoading {
                         ProgressView()
                     }
@@ -261,13 +474,13 @@ struct WhatsAppSessionView: View {
 
                 if let error = appState.whatsAppState?.error, !error.isEmpty {
                     Label(error, systemImage: "exclamationmark.triangle.fill")
-                        .font(.footnote)
+                        .font(.footnote.weight(.medium))
                         .foregroundStyle(.red)
                 }
             }
-            .padding(.vertical, 6)
+            .padding(.vertical, 4)
         } header: {
-            Text("Current Session")
+            Text("Current WhatsApp Link")
         }
     }
 
@@ -276,12 +489,12 @@ struct WhatsAppSessionView: View {
         case "ready": return "Connected and ready"
         case "qr": return "Waiting for QR pairing"
         case "authenticated": return "WhatsApp authenticated"
-        case "starting": return "Starting WhatsApp"
-        case "logging_out": return "Logging out"
+        case "starting": return "Starting WhatsApp…"
+        case "logging_out": return "Logging out…"
         case "disconnected": return "WhatsApp disconnected"
         case "error": return "Connection error"
         case .some(let value): return value.replacingOccurrences(of: "_", with: " ").capitalized
-        case nil: return "Checking connection"
+        case nil: return "Checking connection…"
         }
     }
 
@@ -305,35 +518,39 @@ struct WhatsAppSessionView: View {
     private var sessionActionsSection: some View {
         Section {
             Button {
+                Haptics.impact(.light)
                 Task { await appState.refreshWhatsAppStatus() }
             } label: {
-                Label("Refresh Status", systemImage: "arrow.clockwise")
+                Label("Refresh Session Status", systemImage: "arrow.clockwise")
             }
             .disabled(appState.isAdminLoading)
 
             Button(role: .destructive) {
+                Haptics.impact(.medium)
                 showLogoutConfirm = true
             } label: {
-                Label("Unlink WhatsApp", systemImage: "rectangle.portrait.and.arrow.right")
+                Label("Unlink WhatsApp Session", systemImage: "rectangle.portrait.and.arrow.right")
             }
             .disabled(appState.isAdminLoading)
 
             Button(role: .destructive) {
+                Haptics.impact(.medium)
                 Task { await appState.signOut() }
             } label: {
-                Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.left")
+                Label("Sign Out of Guard Account", systemImage: "rectangle.portrait.and.arrow.left")
             }
             .disabled(appState.isAdminLoading)
         } header: {
-            Text("Session")
+            Text("Session Actions")
         } footer: {
-            Text("Unlink WhatsApp disconnects only this WhatsApp session; your guard account remains. Sign Out returns to the login screen.")
+            Text("Unlink WhatsApp disconnects only this session. Your guard account and patrol data remain safe on the server.")
         }
     }
 
     private var accountRemovalSection: some View {
         Section {
             Button(role: .destructive) {
+                Haptics.impact(.medium)
                 showDeleteConfirm = true
             } label: {
                 Label("Remove Guard Account", systemImage: "trash")
@@ -343,9 +560,9 @@ struct WhatsAppSessionView: View {
             Text("Account Removal")
         } footer: {
             if appState.adminAccounts.count <= 1 {
-                Text("The final account can't be removed. Sign up another guard from the login screen first.")
+                Text("The final guard account cannot be removed.")
             } else {
-                Text("Removing an account permanently deletes its server-side WhatsApp session and patrol data.")
+                Text("Permanently deletes this account, WhatsApp session, and history from the server.")
             }
         }
     }

@@ -2,11 +2,8 @@
 //  SetupView.swift
 //  WatchPoint
 //
-//  Message + schedule config: a read-only overview with an "Edit Setup"
-//  button that enters a 4-step wizard (days -> shift -> message ->
-//  review), matching the browser's step-by-step flow. Pushed from the
-//  Account hub as "Automatic Message & Schedule" -- no NavigationStack of its own
-//  since it's a pushed destination, not a tab root.
+//  Message & schedule config: read-only overview with a 4-step wizard
+//  (days -> shift -> message -> review) and live WhatsApp bubble preview.
 //
 
 import SwiftUI
@@ -16,10 +13,10 @@ enum SetupStep: Int, CaseIterable {
 
     var title: String {
         switch self {
-        case .days: return "Which days?"
-        case .shift: return "Day or night shift?"
-        case .message: return "What should scheduled messages say?"
-        case .review: return "Review & turn on"
+        case .days: return "Active Shift Days"
+        case .shift: return "Shift Schedule"
+        case .message: return "Automated Message"
+        case .review: return "Review & Enable"
         }
     }
 }
@@ -40,7 +37,7 @@ struct SetupView: View {
                     overview(config: config)
                 }
             } else if appState.isConfigLoading {
-                ProgressView("Loading setup…")
+                ProgressView("Loading schedule configuration…")
             } else {
                 ContentUnavailableView(
                     "Not Connected",
@@ -57,114 +54,148 @@ struct SetupView: View {
             }
         }
         .alert("Saved", isPresented: $showSavedConfirmation) {
-            Button("OK", role: .cancel) {}
+            Button("OK", role: .cancel) {
+                Haptics.impact(.light)
+            }
         } message: {
-            Text("Your automatic message and schedule have been saved.")
+            Text("Your automatic message and schedule have been saved successfully.")
         }
     }
 
-    /// Read-only summary of the current setup with a single "Edit Setup"
-    /// button, so returning users land on an overview instead of always
-    /// being dropped back into step 1 of the wizard.
+    // MARK: - Read-Only Overview
+
     private func overview(config: Binding<PatrolConfig>) -> some View {
         Form {
-            Section("Current Setup") {
-                LabeledContent("Shared Destination", value: config.wrappedValue.groupName.isEmpty ? "Not set" : config.wrappedValue.groupName)
-                LabeledContent("Days", value: dayList(config.wrappedValue.schedule.activeShiftDays))
-                LabeledContent("Shift", value: "\(config.wrappedValue.schedule.shiftStartHour):00 – \(config.wrappedValue.schedule.shiftEndHour):00")
-                LabeledContent("Scheduled Message", value: config.wrappedValue.message.isEmpty ? "Not set" : config.wrappedValue.message)
-                    .lineLimit(3)
+            Section("Current Routine") {
+                LabeledContent("Destination", value: config.wrappedValue.groupName.isEmpty ? "Not set" : config.wrappedValue.groupName)
+                LabeledContent("Active Days", value: dayList(config.wrappedValue.schedule.activeShiftDays))
+                LabeledContent("Shift Timing", value: "\(config.wrappedValue.schedule.shiftStartHour):00 – \(config.wrappedValue.schedule.shiftEndHour):00")
+            }
+
+            Section("Message Preview") {
+                WhatsAppBubblePreview(
+                    message: config.wrappedValue.message,
+                    chatName: config.wrappedValue.groupName.isEmpty ? "Security Ops" : config.wrappedValue.groupName
+                )
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
             }
 
             Section {
-                Toggle("Automatic sending", isOn: config.schedule.enabled)
+                Toggle("Automatic Scheduled Sending", isOn: config.schedule.enabled)
                     .onChange(of: config.wrappedValue.schedule.enabled) { _, _ in
+                        Haptics.impact(.light)
                         Task { await appState.saveConfig() }
                     }
+            } footer: {
+                Text("When enabled, the engine dispatches this message automatically across your active shift window.")
             }
 
             Section {
                 Button {
+                    Haptics.impact(.medium)
                     openEditor(with: config.wrappedValue)
                 } label: {
-                    Label("Edit Setup", systemImage: "pencil")
+                    Label("Edit Setup Wizard", systemImage: "pencil")
+                        .fontWeight(.semibold)
                         .frame(maxWidth: .infinity)
-                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(.green)
                 .controlSize(.large)
             }
         }
     }
 
+    // MARK: - Wizard
+
     private func wizard(config: Binding<PatrolConfig>) -> some View {
         VStack(spacing: 0) {
-            VStack(spacing: 6) {
-                ProgressView(value: Double(step.rawValue + 1), total: Double(SetupStep.allCases.count))
-                Text("Step \(step.rawValue + 1) of \(SetupStep.allCases.count)")
-                    .font(.caption)
+            // Step Progress Bar
+            VStack(spacing: 8) {
+                HStack {
+                    ForEach(SetupStep.allCases, id: \.self) { s in
+                        Capsule()
+                            .fill(s.rawValue <= step.rawValue ? Color.green : Color(.separator).opacity(0.3))
+                            .frame(height: 4)
+                    }
+                }
+                Text("Step \(step.rawValue + 1) of \(SetupStep.allCases.count): \(step.title)")
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
-            .padding()
+            .padding(.horizontal, 20)
+            .padding(.top, 12)
+            .padding(.bottom, 6)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text(step.title)
-                        .font(.title2.weight(.semibold))
+                VStack(alignment: .leading, spacing: 18) {
                     stepContent(config: config)
                 }
-                .padding()
+                .padding(20)
             }
             .scrollDismissesKeyboard(.interactively)
 
             Divider()
 
-            HStack {
+            // Navigation Bar Controls
+            HStack(spacing: 12) {
                 Button("Back") {
+                    Haptics.selection()
                     step = SetupStep(rawValue: step.rawValue - 1) ?? .days
                 }
+                .buttonStyle(.bordered)
                 .disabled(step == .days)
 
                 Spacer()
 
                 if step == .review {
                     Button {
+                        Haptics.impact(.medium)
                         Task {
                             guard let draftConfig else { return }
                             let previousConfig = appState.patrolConfig
                             appState.patrolConfig = draftConfig
                             let saved = await appState.saveConfig()
                             if saved {
+                                Haptics.notification(.success)
                                 showSavedConfirmation = true
                                 closeEditor()
                             } else {
-                                // Keep the editor and its draft intact when
-                                // the API rejects or fails the save.
+                                Haptics.notification(.error)
                                 appState.patrolConfig = previousConfig
                             }
                         }
                     } label: {
                         if appState.isConfigLoading {
-                            ProgressView()
+                            ProgressView().tint(.white)
                         } else {
-                            Label("Save & Done", systemImage: "checkmark.circle")
+                            Label("Save & Finish", systemImage: "checkmark.circle.fill")
+                                .fontWeight(.bold)
                         }
                     }
                     .buttonStyle(.borderedProminent)
+                    .tint(.green)
                     .disabled(appState.isConfigLoading)
                 } else {
-                    Button("Next") {
+                    Button("Next Step") {
+                        Haptics.selection()
                         step = SetupStep(rawValue: step.rawValue + 1) ?? .review
                     }
                     .buttonStyle(.borderedProminent)
+                    .tint(.green)
                 }
             }
-            .padding()
+            .padding(16)
+            .background(Color(.secondarySystemGroupedBackground))
         }
         .keyboardDoneButton()
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { closeEditor() }
+                Button("Cancel") {
+                    Haptics.impact(.light)
+                    closeEditor()
+                }
             }
         }
     }
@@ -195,40 +226,57 @@ struct SetupView: View {
         }
     }
 
+    // MARK: - Wizard Steps
+
     private func daysStep(config: Binding<PatrolConfig>) -> some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Choose the days a shift starts. This repeats every week.")
+            Text("Select Shift Days")
+                .font(.title3.weight(.bold))
+            Text("Choose the recurring days of the week when messages should be active.")
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
+
             weekdayToggleRow(config: config)
 
-            Divider()
+            Divider().padding(.vertical, 4)
 
-            Text("One-time dates")
+            Text("One-Time Custom Dates")
                 .font(.headline)
-            Text("Add a single extra shift that isn't part of your weekly routine.")
+            Text("Add single extra dates that aren't part of your regular recurring schedule.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
             oneTimeDatesEditor(config: config)
         }
     }
 
     private func shiftStep(config: Binding<PatrolConfig>) -> some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("We'll spread the messages naturally across these hours.")
+            Text("Shift Timing")
+                .font(.title3.weight(.bold))
+            Text("Messages are sent naturally throughout this shift window.")
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 12) {
                 shiftCard(
-                    emoji: "☀️", title: "Day", time: "8:00 AM – 8:00 PM",
+                    emoji: "☀️",
+                    title: "Day Shift",
+                    time: "8:00 AM – 8:00 PM",
                     isSelected: config.wrappedValue.schedule.shiftStartHour == 8 && config.wrappedValue.schedule.shiftEndHour == 20
                 ) {
+                    Haptics.selection()
                     config.schedule.shiftStartHour.wrappedValue = 8
                     config.schedule.shiftEndHour.wrappedValue = 20
                 }
+
                 shiftCard(
-                    emoji: "🌙", title: "Night", time: "8:00 PM – 8:00 AM",
+                    emoji: "🌙",
+                    title: "Night Shift",
+                    time: "8:00 PM – 8:00 AM",
                     isSelected: config.wrappedValue.schedule.shiftStartHour == 20 && config.wrappedValue.schedule.shiftEndHour == 8
                 ) {
+                    Haptics.selection()
                     config.schedule.shiftStartHour.wrappedValue = 20
                     config.schedule.shiftEndHour.wrappedValue = 8
                 }
@@ -239,89 +287,113 @@ struct SetupView: View {
     private func shiftCard(emoji: String, title: String, time: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 8) {
-                Text(emoji).font(.system(size: 36))
-                Text(title).font(.headline)
+                Text(emoji).font(.system(size: 40))
+                Text(title).font(.headline.weight(.bold))
                 Text(time).font(.caption).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity)
-            .padding()
-            .background(isSelected ? Color.accentColor.opacity(0.15) : Color(.secondarySystemGroupedBackground))
+            .padding(18)
+            .background(isSelected ? Color.green.opacity(0.12) : Color(.secondarySystemGroupedBackground))
             .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(isSelected ? Color.accentColor : .clear, lineWidth: 2)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(isSelected ? Color.green : Color(.separator).opacity(0.4), lineWidth: isSelected ? 2 : 0.8)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)
     }
 
     private func messageStep(config: Binding<PatrolConfig>) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("This exact message is sent automatically by the schedule. Checkpoint arrivals use the separate Patrol Arrival Message setting.")
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Scheduled Message Content")
+                .font(.title3.weight(.bold))
+            Text("This text is dispatched automatically during shifts. Checkpoint GPS arrivals use their own separate Patrol Arrival Message.")
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
+
             TextEditor(text: config.message)
-                .frame(minHeight: 180)
+                .scrollContentBackground(.hidden)
+                .frame(minHeight: 140)
+                .padding(8)
+                .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(Color(.separator), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color(.separator).opacity(0.4), lineWidth: 0.8)
                 )
+
+            WhatsAppBubblePreview(
+                message: config.wrappedValue.message,
+                chatName: config.wrappedValue.groupName.isEmpty ? "Security Ops" : config.wrappedValue.groupName
+            )
         }
     }
 
     private func reviewStep(config: Binding<PatrolConfig>) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 8) {
-                LabeledContent("Chat", value: config.wrappedValue.groupName)
-                LabeledContent("Days", value: dayList(config.wrappedValue.schedule.activeShiftDays))
-                LabeledContent("Shift", value: "\(config.wrappedValue.schedule.shiftStartHour):00 – \(config.wrappedValue.schedule.shiftEndHour):00")
-                LabeledContent("Scheduled Message", value: config.wrappedValue.message)
-                    .lineLimit(3)
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Review Schedule")
+                .font(.title3.weight(.bold))
+
+            VStack(alignment: .leading, spacing: 10) {
+                LabeledContent("Destination Chat", value: config.wrappedValue.groupName)
+                LabeledContent("Active Days", value: dayList(config.wrappedValue.schedule.activeShiftDays))
+                LabeledContent("Shift Window", value: "\(config.wrappedValue.schedule.shiftStartHour):00 – \(config.wrappedValue.schedule.shiftEndHour):00")
             }
             .panel()
 
-            Toggle("Send automatically", isOn: config.schedule.enabled)
+            Toggle("Enable Automated Routine", isOn: config.schedule.enabled)
+                .fontWeight(.medium)
 
-            DisclosureGroup("Fine-Tune Timing (Optional)") {
-                Stepper(
-                    "First message earliest: \(config.schedule.firstSendMinuteMin.wrappedValue) min",
-                    value: config.schedule.firstSendMinuteMin, in: 0...59
-                )
-                Stepper(
-                    "First message latest: \(config.schedule.firstSendMinuteMax.wrappedValue) min",
-                    value: config.schedule.firstSendMinuteMax, in: 0...59
-                )
-                Stepper(
-                    "Shortest gap: \(config.schedule.minSendIntervalMinutes.wrappedValue) min",
-                    value: config.schedule.minSendIntervalMinutes, in: 75...240, step: 5
-                )
-                Stepper(
-                    "Longest gap: \(config.schedule.maxSendIntervalMinutes.wrappedValue) min",
-                    value: config.schedule.maxSendIntervalMinutes, in: 75...240, step: 5
-                )
+            DisclosureGroup("Advanced Timing Parameters") {
+                VStack(spacing: 8) {
+                    Stepper(
+                        "Earliest first send: \(config.schedule.firstSendMinuteMin.wrappedValue)m after shift start",
+                        value: config.schedule.firstSendMinuteMin, in: 0...59
+                    )
+                    Stepper(
+                        "Latest first send: \(config.schedule.firstSendMinuteMax.wrappedValue)m after shift start",
+                        value: config.schedule.firstSendMinuteMax, in: 0...59
+                    )
+                    Stepper(
+                        "Shortest send gap: \(config.schedule.minSendIntervalMinutes.wrappedValue) min",
+                        value: config.schedule.minSendIntervalMinutes, in: 75...240, step: 5
+                    )
+                    Stepper(
+                        "Longest send gap: \(config.schedule.maxSendIntervalMinutes.wrappedValue) min",
+                        value: config.schedule.maxSendIntervalMinutes, in: 75...240, step: 5
+                    )
+                }
+                .font(.footnote)
+                .padding(.top, 6)
             }
         }
     }
 
     private func dayList(_ days: [Int]) -> String {
-        guard !days.isEmpty else { return "None" }
+        guard !days.isEmpty else { return "None selected" }
         let names = weekdayLabels.filter { days.contains($0.value) }.map(\.short)
         return names.joined(separator: ", ")
     }
 
     private func weekdayToggleRow(config: Binding<PatrolConfig>) -> some View {
-        HStack {
+        HStack(spacing: 6) {
             ForEach(weekdayLabels, id: \.value) { day in
                 let isOn = config.wrappedValue.schedule.activeShiftDays.contains(day.value)
-                Button(day.short) {
+                Button {
+                    Haptics.selection()
                     if isOn {
                         config.schedule.activeShiftDays.wrappedValue.removeAll { $0 == day.value }
                     } else {
                         config.schedule.activeShiftDays.wrappedValue.append(day.value)
                     }
+                } label: {
+                    Text(day.short)
+                        .font(.subheadline.weight(isOn ? .bold : .regular))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(isOn ? Color.green : Color(.tertiarySystemGroupedBackground))
+                        .foregroundStyle(isOn ? .white : .primary)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
-                .buttonStyle(.bordered)
-                .tint(isOn ? .accentColor : .secondary)
-                .font(.caption)
             }
         }
     }
@@ -330,24 +402,32 @@ struct SetupView: View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(config.wrappedValue.schedule.extraShiftDates, id: \.self) { date in
                 HStack {
-                    Text(date)
+                    Label(date, systemImage: "calendar")
                     Spacer()
                     Button(role: .destructive) {
+                        Haptics.impact(.light)
                         config.schedule.extraShiftDates.wrappedValue.removeAll { $0 == date }
                     } label: {
                         Image(systemName: "trash")
+                            .foregroundStyle(.red)
                     }
                 }
+                .padding(10)
+                .background(Color(.tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 8))
             }
+
             Button {
+                Haptics.impact(.light)
                 let today = isoDateString(Date())
                 if !config.wrappedValue.schedule.extraShiftDates.contains(today) {
                     config.schedule.extraShiftDates.wrappedValue.append(today)
                     config.schedule.extraShiftDates.wrappedValue.sort()
                 }
             } label: {
-                Label("Add One-Time Date (Today)", systemImage: "plus")
+                Label("Add Today (\(isoDateString(Date())))", systemImage: "plus.circle.fill")
+                    .font(.subheadline.weight(.medium))
             }
+            .padding(.top, 4)
         }
     }
 
