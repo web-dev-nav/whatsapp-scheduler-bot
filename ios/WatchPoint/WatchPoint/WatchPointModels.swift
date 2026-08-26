@@ -13,11 +13,11 @@ enum AppRelease {
     static let requiredEngineVersion = "1.3.0"
 
     static var version: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.2"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.3"
     }
 
     static var build: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "6"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "7"
     }
 
     static var displayVersion: String { "\(version) (\(build))" }
